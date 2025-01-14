@@ -92,6 +92,7 @@ struct Light
 };
 
 #ifdef __cplusplus
+#include <algorithm>
 /**
  * Make a light type from a area light.
  * @param radiance Colour and value of light.
