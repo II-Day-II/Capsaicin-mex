@@ -210,7 +210,7 @@ inline Light MakeEnvironmentLight(uint width, uint height)
     light.v3 = float4(float3(0.0f), glm::uintBitsToFloat(static_cast<glm::uint>(kLight_Environment)));
     return light;
 }
-#endif
+#endif //__cplusplus
 
 /**
  * Check if a light is a delta light.
@@ -253,4 +253,4 @@ inline bool hasLightPosition(Light light)
 #endif
 }
 
-#endif
+#endif // lights_shared_h

@@ -38,6 +38,12 @@ public:
      */
     AOVList getAOVs() const noexcept override;
 
+     /**
+     * Gets a list of any debug views provided by the current render technique.
+     * @return A list of all supported debug views.
+     */
+    DebugViewList getDebugViews() const noexcept override;
+
     /**
      * Initialise any internal data or state.
      * @note This is automatically called by the framework after construction and should be used to create
@@ -65,6 +71,12 @@ public:
     void renderGUI(CapsaicinInternal &capsaicin) const noexcept override;
 
 protected:
+
+    bool initKernel(CapsaicinInternal const &capsaicin) noexcept;
+
+    RenderOptions options;
+    GfxKernel     rc_kernel;
+    GfxProgram    rc_program;
 
 };
 }

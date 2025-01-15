@@ -40,14 +40,14 @@ public:
 	{
 		std::vector<std::unique_ptr<RenderTechnique>> render_techniques;
 		render_techniques.emplace_back(std::make_unique<VisibilityBuffer>());
-        render_techniques.emplace_back(std::make_unique<SSGI>());
-        render_techniques.emplace_back(std::make_unique<GI10>());
+        //render_techniques.emplace_back(std::make_unique<SSGI>());
+        //render_techniques.emplace_back(std::make_unique<GI10>());
         render_techniques.emplace_back(std::make_unique<RCTechnique>());
-        render_techniques.emplace_back(std::make_unique<Atmosphere>());
-        render_techniques.emplace_back(std::make_unique<Skybox>());
-        render_techniques.emplace_back(std::make_unique<UpdateHistory>());
-        render_techniques.emplace_back(std::make_unique<TAA>());
-        render_techniques.emplace_back(std::make_unique<ToneMapping>());
+        //render_techniques.emplace_back(std::make_unique<Atmosphere>());
+        //render_techniques.emplace_back(std::make_unique<Skybox>());
+        //render_techniques.emplace_back(std::make_unique<UpdateHistory>());
+        //render_techniques.emplace_back(std::make_unique<TAA>());
+        //render_techniques.emplace_back(std::make_unique<ToneMapping>());
 
 		return render_techniques;
 	}
