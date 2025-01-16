@@ -78,5 +78,8 @@ protected:
     GfxKernel     rc_kernel;
     GfxProgram    rc_program;
 
+    GfxKernel     debug_rc_kernel;
+    GfxProgram    debug_rc_program;
+
 };
 }

@@ -1,161 +1,13 @@
-﻿// Input
-int _CascadeLevel;
-int2 _ProbesCount;
-float4x4 _WorldToView;
-float4x4 _ViewToHClip;
+﻿
+uint g_cascadeId;
+uint2 g_probesCount; 
 
-Texture2D<float2> _MinMaxDepth;
-Texture2D<float> _SmoothedDepth;
-Texture2D<float4> _BlurredColor;
+Texture2D g_Depth;
+Texture2D g_GeometryNormalBuffer;
+SamplerState g_samplerNearest;
 
-// Output
-RWTexture2D<float4> _OutCascade;
-
-// TODO: move this to Capsaicin schtuff
-SamplerState sampler_PointClamp;
-SamplerState sampler_LinearClamp;
-
-float4x4 unity_MatrixInvVP;
-float3 _WorldSpaceCameraPos;
-float4 _ZBufferParams;
-// ODOTV
-
-
-///// common
-float4 _ColorTexture_TexelSize;
-float4 _DepthTexture_TexelSize;
-float4 _CascadeBufferSize;
-
-Texture2D _ColorTexture;
-Texture2D<float> _DepthTexture;
-Texture2D<half3> _NormalsTexture;
-
-#define UNITY_RAW_FAR_CLIP_VALUE (0.0)
-#define PI          3.14159265358979323846
-#define TWO_PI      6.28318530717958647693
-#define LOAD_TEXTURE2D(textureName, unCoord2)                                   textureName.Load(int3(unCoord2, 0))
-#define SAMPLE_TEXTURE2D(textureName, samplerName, coord2)                               textureName.Sample(samplerName, coord2)
-#define SAMPLE_TEXTURE2D_LOD(textureName, samplerName, coord2, lod)                      textureName.SampleLevel(samplerName, coord2, lod)
-
-
-float GetSectorId(int2 texCoord, float probeSize)
-{
-    return texCoord.x % probeSize + (texCoord.y % probeSize) * probeSize;
-}
-
-float GetAngle(int2 texCoord, float probeSize)
-{
-    float sectorId = texCoord.x % probeSize + (texCoord.y % probeSize) * probeSize;
-    float angleStep = TWO_PI / (probeSize * probeSize);
-    return (sectorId + 0.5f) * angleStep;
-}
-
-float2 GetRayDirection(int2 texCoord, float probeSize)
-{
-    float sectorId = GetSectorId(texCoord, probeSize);
-    float2 direction;
-    sincos((sectorId + 0.5f) * PI * 4.0f / (probeSize * probeSize), direction.y, direction.x);
-    return direction;
-}
-
-inline float SampleLinearDepth(float2 uv)
-{
-    // float rawDepth = SAMPLE_TEXTURE2D_LOD(_DepthTexture, sampler_PointClamp, uv, 0).r;
-    float rawDepth = LOAD_TEXTURE2D(_DepthTexture, uv * _ColorTexture_TexelSize.xy).r;
-    return rawDepth;
-    // return LinearEyeDepth(rawDepth, zBufferParams);
-}
-
-float4 RayTrace(float2 probeUV, float2 ray, float sceneDepth, int stepsCount)
-{
-    // TODO: Cast ray in Depth target pixel coords (or use downscaled version).
-    // ray *= _CascadeBufferSize.xy * _ColorTexture_TexelSize.zw;
-    float2 uv = probeUV;
-    float4 color = float4(0.0f, 0.0f, 0.0f, 1.0f);
-    for (int i = 0; i < stepsCount; i++)
-    {
-        uv += ray;
-        if (any(uv < 0) || any(uv > 1))
-        {
-            break;
-        }
-
-        float currentDepth = LOAD_TEXTURE2D(_DepthTexture, uv * _ColorTexture_TexelSize.xy).r;
-        if (sceneDepth < currentDepth)
-        {
-            color = float4(1.0f, 1.0f, 1.0f, 0.0f);
-            break;
-        }
-    }
-
-    return color * SAMPLE_TEXTURE2D_LOD(_ColorTexture, sampler_PointClamp, uv, 0);
-}
-
-
-int AngleToIndex(float angle, int dim)
-{
-    float t = angle / (2 * PI);
-    int index = floor(t * float(dim * dim));
-    return index;
-}
-
-int2 IndexToCoords(float index, float dim)
-{
-    //in case the index is lower than 0 or higher than the number of angles
-    index = index % (dim * dim);
-    int x = index % dim;
-    int y = index / dim;
-
-    return int2(x, y);
-}
-
-int2 CalculateRange(int cascadeLevel)
-{
-    const float factor = 4.0;
-
-    float start = (1.0 - pow(factor, cascadeLevel)) / (1.0 - factor);
-    float end = (1.0 - pow(factor, cascadeLevel + 1.0)) / (1.0 - factor);
-
-    return int2(start, end);
-}
-
-float3 GetPositionWS(float2 screenUV, float rawDepth)
-{
-    screenUV = screenUV * 2 - 1;
-    return ComputeWorldSpacePosition(
-        float4(screenUV.x, -screenUV.y, rawDepth, 1),
-        unity_MatrixInvVP // _InvViewProjection
-    );
-}
-
-float3 Intersect(float3 planeP, float3 planeN, float3 rayP, float3 rayD)
-{
-    float d = dot(planeP, -planeN);
-    float t = -(d + dot(rayP, planeN)) / dot(rayD, planeN);
-    return rayP + t * rayD;
-}
-
-static float4 DirectionFirstRayZ = float4(-2.0f, -1.0f, 1.0f, 2.0f);
-
-float3 GetRay_DirectionFirst(float2 angleId, float cascadeLevel)
-{
-    float deltaAngle = TWO_PI * pow(0.5f, cascadeLevel) * 0.125f; // 1/8
-    // Azimuth
-    float phi = (angleId.x + 0.5f) * deltaAngle;
-    // Polar
-    float theta = lerp(0.4f, 0.6f, angleId.y * 0.33334f) * PI;
-
-    float2 sinCosPhi;
-    float2 sinCosTheta;
-    sincos(phi, sinCosPhi.x, sinCosPhi.y);
-    sincos(theta, sinCosTheta.x, sinCosTheta.y);
-
-    return float3(sinCosTheta.x * sinCosPhi.y, sinCosTheta.y, sinCosTheta.x * sinCosPhi.x);
-}
-
-///// nommoc
-
-
+uint2 g_BufferDimensions;
+RWTexture2D<float4> o_CascadeTex;
 
 
 // Cascade Layout
@@ -175,272 +27,70 @@ float3 GetRay_DirectionFirst(float2 angleId, float cascadeLevel)
 // |_↗_|_↑_|_↖_|_←_|_↙_|_↓_|_↘_|_↗_|
 // |_↗_|_↑_|_↖_|_←_|_↙_|_↓_|_↘_|_↗_|
 
-static const int2 Ranges4[] =
+float GetProbeDepth(float2 uv, uint cascade_level)
 {
-    int2(0, 1),
-    int2(1, 4),
-    int2(4, 16),
-    int2(16, 64),
-    int2(64, 256),
-    int2(256, 1024),
-    int2(1024, 2048),
-};
-
-
-
-float3 TransformViewToScreenSpace(float3 positionVS)
-{
-    float4 positionCS = mul(_ViewToHClip, float4(positionVS, 1));
-    positionCS.xyz /= positionCS.w;
-    positionCS.xy = mad(positionCS.xy, float2(0.5f, -0.5f), float2(0.5f, 0.5f));
-    return positionCS.xyz;
+    //return g_Depth.Sample(g_samplerNearest, uv);
+    return g_Depth.SampleLevel(g_samplerNearest, uv, cascade_level + 1); // TODO: does this require Hi-Z?
 }
 
-float4 LoadUpperCascadeBilinear(int2 coords, float2 weights)
+float GetProbeNormal(uint2 coord)
 {
-    float4 a = _OutCascade[coords];
-    float4 b = _OutCascade[coords + int2(1, 0)];
-    float4 c = _OutCascade[coords + int2(0, 1)];
-    float4 d = _OutCascade[coords + int2(1, 1)];
-
-    float4 e = lerp(a, b, weights.x);
-    float4 f = lerp(c, d, weights.x);
-
-    return lerp(e, f, weights.y);
+    return g_GeometryNormalBuffer.Load(int3(coord, 0));
 }
 
-inline float GetProbeDepth(float2 uv, int cascadeLevel)
+// TODO: figure out how I want to structure interval lengths
+float2 GetInterval(uint cascade_index)
 {
-    float probeDepth = SAMPLE_TEXTURE2D_LOD(
-        _MinMaxDepth,
-        sampler_LinearClamp,
-        uv,
-        cascadeLevel + 1
-    ).y;
-    return probeDepth;
+    const float factor = 0.01;
+    float start = pow(2, cascade_index) * factor;
+    float end = pow(2, cascade_index + 1) * factor;
+    return float2(start, end);
 }
 
-inline float4 LoadUpperRadiance(int2 coords)
+RayDesc GetRay(float2 probeCenterUv, float probeDepth, float3 probeNormal, uint cascade_index)
 {
-    // TODO: Take into account probe positions to select more proper angled probes.
-    const int2 lowerCascadeSize = _ProbesCount;
-    const int2 upperCascadeSize = _ProbesCount * 0.5f;
-
-    int2 upperCascadeCoords = floor(coords * 0.5f);
-
-    // 02----12----22----32----42----42
-    // | D01 |     | E11 |     | F21 |
-    // 02----12----22----32----42----42
-    // |     |     |     |     |     |
-    // 01----11----21----31----41----41
-    // | A00 |     | B10 |     | C20 |
-    // 00----10----20----30----40----40
-
-    int2 lowerProbeId = coords % lowerCascadeSize;
-    int2 upperProbeBottomLeftId = clamp(floor((lowerProbeId - 1) * 0.5f), 0, upperCascadeSize - 2);
-    float2 bilinearWeight = saturate(fmod((lowerProbeId - 1) * 0.5f, 1.0f) + 0.25f);
-
-    upperCascadeCoords = upperCascadeCoords / upperCascadeSize * upperCascadeSize;
-    upperCascadeCoords.x *= 2;
-    upperCascadeCoords += upperProbeBottomLeftId;
-    upperCascadeCoords.y += upperCascadeSize.y * 4;
-
-    int2 offset = int2(upperCascadeSize.x, 0);
-
-    float4 upperRadiance = 0.0f;
-
-    // NOTE: Sample 2 main rays
-    upperRadiance += LoadUpperCascadeBilinear(upperCascadeCoords, bilinearWeight);
-    upperRadiance += LoadUpperCascadeBilinear(upperCascadeCoords + offset, bilinearWeight);
-
-#ifdef _FOUR_RAYS_MERGE
-    // NOTE: Sample 2 secondary rays
-    int2 secondaryUpperCascadeCoords = upperCascadeCoords - offset;
-    secondaryUpperCascadeCoords.x += (secondaryUpperCascadeCoords.x < 0) * _CascadeBufferSize.x;
-    upperRadiance += LoadUpperCascadeBilinear(secondaryUpperCascadeCoords, bilinearWeight);
-    secondaryUpperCascadeCoords = upperCascadeCoords + 2 * offset;
-    secondaryUpperCascadeCoords.x -= (secondaryUpperCascadeCoords.x > _CascadeBufferSize.x) * _CascadeBufferSize.x;
-    upperRadiance += LoadUpperCascadeBilinear(secondaryUpperCascadeCoords, bilinearWeight);
-#endif
-
-#ifdef _FOUR_RAYS_MERGE
-    upperRadiance *= 0.25f;
-#else
-    upperRadiance *= 0.5f;
-#endif
-
-    return upperRadiance;
+    RayDesc ray_desc;
+    float2 interval = GetInterval(cascade_index);
+    ray_desc.TMin = interval.x;
+    ray_desc.TMax = interval.y;
+    // TODO: origin and direction
+    return ray_desc;
 }
 
-[numthreads(8, 4, 1)]
-void RenderAndMergeCascade(uint3 id : SV_DispatchThreadID)
+
+[numthreads(8,4,1)]
+void RenderCascades(uint3 did : SV_DispatchThreadID)
 {
-    const float RayScale = 0.02f;
-
-    int2 coords = int2(id.xy);
-    int2 targetCoords = int2(id.xy);
-    targetCoords.y += _ProbesCount.y * 4;
-
-    if (coords.x >= _CascadeBufferSize.x || coords.y >= _ProbesCount.y * 4)
+    int2 coords = int2(did.xy);
+    //float2 uv = float2(coords) / float2(g_BufferDimensions);
+    //o_CascadeTex[coords] = float4(uv, 0.025, 1.0);
+    int2 targetCoords = coords + int2(0, 4 * g_probesCount.y);
+    if (coords.x >= g_BufferDimensions.x || coords.y >= 4 * g_probesCount.y)
     {
-        return;
+        return; // Out of bounds
     }
-
-    if (
-        _CascadeLevel == 0 &&
-        any(fmod(coords, _ProbesCount) == 0 || (coords + 1) % _ProbesCount == 0)
-    )
-    {
-        // NOTE: Borders
-        // _OutCascade[targetCoords] = float4(0.0f, 0.0f, 0.2f * _CascadeLevel, 1.0f);
-        // _OutCascade[targetCoords] = float4(0.0f, 0.0f, 1.0f, 1.0f);
-        // return;
-    }
-
-    // BUG: Fix probe probeCenterUV!
-    int2 probeCenterCoord = coords % _ProbesCount;
-    // TODO: Use buffer bigger than RenderTarget, for alignment, drop probes that out of screen
-    float2 probeCenterUV = float2(probeCenterCoord + 1.0f) / (_ProbesCount + 1.0f);
-
-    const float cascadeLevel = _CascadeLevel;
-
-    float2 angleId;
-    const float cascadeFactor = pow(2.0f, cascadeLevel);
-    const float projRays = 8.0f * cascadeFactor;
-    const float depthRays = floor(4.0f * cascadeFactor * 2.0f);
-    angleId.x = floor(coords.x * projRays * _CascadeBufferSize.z);
-    angleId.y = fmod(floor((1.0f - (coords.y + 1) * _CascadeBufferSize.w) * depthRays), 4);
-
+    int2 probeCenterCoord = coords % g_probesCount;
+    float2 probeCenterUV = float2(probeCenterCoord + 1) / float2(g_probesCount + 1);
+    
+    const float cascadeLevel = float(g_cascadeId);
+    
+    const float cascadeFactor = pow(2.0, cascadeLevel);
+    const float projRays = 8.0 * cascadeFactor;
+    const float depthRays = floor(4.0 * 2.0 * cascadeFactor);
+    float2 angleId = float2(floor(coords.x * projRays / float(g_BufferDimensions.x)), fmod(floor(1.0 - (coords.y + 1.0) / float(g_BufferDimensions.y)) * depthRays, 4.0));
     float probeDepth = GetProbeDepth(probeCenterUV, cascadeLevel);
-    if (probeDepth == UNITY_RAW_FAR_CLIP_VALUE)
+    float probeNormal = GetProbeNormal(probeCenterCoord);
+    bool is_sky_pixel = dot(probeNormal, probeNormal) == 0.0f;
+    
+    if (is_sky_pixel)
     {
-        _OutCascade[coords] = float4(0.0f, 0.0f, 0.0f, 1.0f);
+        o_CascadeTex[targetCoords] = float4(float3(0.0), 1.0);
         return;
     }
-
-    // Raytracing
-    float3 probeCenterWS = GetPositionWS(probeCenterUV, probeDepth);
-    float3 viewDirectionWS = normalize(probeCenterWS - _WorldSpaceCameraPos);
-    probeCenterWS -= viewDirectionWS * 0.2f;
-
-    float3 directionWS = GetRay_DirectionFirst(angleId, cascadeLevel);
-
-    int2 range = Ranges4[cascadeLevel];
-
-    float3 rayOriginWS = probeCenterWS + directionWS * RayScale * range.x;
-    float3 rayEndWS = probeCenterWS + directionWS * RayScale * range.y;
-
-    float3 rayOriginVS = mul(_WorldToView, float4(rayOriginWS, 1));
-    float3 rayEndVS = mul(_WorldToView, float4(rayEndWS, 1));
-    // rayEndVS = rayOriginVS + directionWS * RayScale * (range.y - range.x);
-
-    float3 rayOriginCS = mul(_ViewToHClip, float4(rayOriginVS, 1));
-    float3 rayEndCS = mul(_ViewToHClip, float4(rayEndVS, 1));
-
-
-    float stepsCount = length((rayEndCS.xy - rayOriginCS.xy) * _ColorTexture_TexelSize.zw);
-    stepsCount *= pow(0.5f, cascadeLevel + 2);
-    stepsCount = min(stepsCount, 200); // NOTE: Oversampling prevention.
-    stepsCount = max(2, stepsCount);
-
-    float4 radiance = float4(0.0f, 0.0f, 0.0f, 1.0f);
-
-
-
-    for (int i = 0; i < stepsCount; i++)
-    {
-        // TODO: Use DDA for ray marching.
-        float3 rayVS = lerp(rayOriginVS, rayEndVS, i / (stepsCount - 1.0f));
-        float3 ray = TransformViewToScreenSpace(rayVS);
-        if (any(ray.xy < 0 || 1 < ray.xy))
-        {
-            break;
-        }
-
-        float2 minMaxDepth = SAMPLE_TEXTURE2D_LOD(
-            _MinMaxDepth,
-            sampler_PointClamp,
-            ray.xy,
-            cascadeLevel + 2
-        ).xy;
-
-        // TODO: Use MinMax compare on lower mips and go up if collide.
-        float depth = minMaxDepth.y;
-
-        float linearDepth = LinearEyeDepth(depth, _ZBufferParams);
-        bool test = linearDepth < -rayVS.z; // && linearDepth > -(rayVS.z + 2.25f);
-
-        // TODO: Compare depth for 4 depth rays.
-        // TODO: Add ray length dependency.
-        float4 depth4Test = linearDepth.xxxx < float4(0.2f, 0.1f, -0.1f, -0.2f) - rayVS.zzzz;
-        float occlusion = dot(depth4Test, 0.2f);
-
-        if (test)
-        {
-            // TODO: Calculate MipLevel depend on resolution!
-            radiance.rgb = SAMPLE_TEXTURE2D_LOD(_BlurredColor, sampler_LinearClamp, ray.xy, cascadeLevel + 2).rgb;
-            radiance.a = 0.0f; // occlusion;
-            break;
-        }
-    }
-
-    if (cascadeLevel > 4)
-    {
-        _OutCascade[targetCoords] = radiance;
-        return;
-    }
-
-    float4 upperRadiance = LoadUpperRadiance(coords);
-    radiance.rgb += upperRadiance.rgb * radiance.a;
-    radiance.a *= upperRadiance.a;
-
-    _OutCascade[targetCoords] = radiance;
-}
-
-float4 _FinalCascade_TexelSize;
-RWTexture2D<float4> _FinalCascade;
-
-[numthreads(8, 8, 1)]
-void CombineCascade(uint3 id : SV_DispatchThreadID)
-{
-    int2 targetCoords = int2(id.x, id.y);
-
-    float2 sideId = floor(2 * id.xy * _FinalCascade_TexelSize.xy);
-    float side = sideId.x + sideId.y * 2;
-
-    int2 coords = fmod(id.xy * 2, _FinalCascade_TexelSize.zw) * 0.25f;
-    coords.y += 7.0f * 0.125f * _CascadeBufferSize.y;
-
-    coords.x += side * _CascadeBufferSize.x * 0.25f;
-    float2 weight = max(0.0f, frac(id.xy * 0.25f) - 0.25f);
-
-    int2 offset = int2(0, -_CascadeBufferSize.y * 0.125f);
-    float4 radiance = 0.0f;
-
-    float2 uv = frac(id.xy * _FinalCascade_TexelSize.xy * 2.0f);
-    float3 normalWS = SAMPLE_TEXTURE2D_LOD(_NormalsTexture, sampler_LinearClamp, uv, 0);
-
-    int2 c = coords;
-
-    for (int i = 0; i < 4; i++)
-    {
-        float2 angleId = float2(side * 2.0f, i);
-        float3 direction = GetRay_DirectionFirst(angleId, 0);
-        radiance += LoadUpperCascadeBilinear(c, weight) * saturate(dot(direction, normalWS));
-        c.y += offset.y;
-    }
-
-    coords.x += _CascadeBufferSize.x * 0.125f;
-
-    c = coords;
-
-    for (int ii = 0; ii < 4; ii++)
-    {
-        float2 angleId = float2(side * 2.0f + 1.0f, ii);
-        float3 direction = GetRay_DirectionFirst(angleId, 0);
-        radiance += LoadUpperCascadeBilinear(c, weight) * saturate(dot(direction, normalWS));
-        c.y += offset.y;
-    }
-
-    _FinalCascade[targetCoords] = radiance * 0.5f;
+    
+    // trace some rays
+    RayDesc ray = GetRay(probeCenterUV, probeDepth, probeNormal, g_cascadeId);
+    // TODO: figure out rays 
+    
+    o_CascadeTex[targetCoords] = float4(probeCenterUV, 0.0, 1.0);
 }

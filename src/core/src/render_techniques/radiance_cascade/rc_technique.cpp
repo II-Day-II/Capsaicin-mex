@@ -19,11 +19,67 @@ bool RCTechnique::init([[maybe_unused]] CapsaicinInternal const &capsaicin) noex
 
 void RCTechnique::terminate() noexcept
 {
-
+    gfxDestroyProgram(gfx_, rc_program);
+    gfxDestroyKernel(gfx_, rc_kernel);
+    if (!!debug_rc_program)
+    {
+        gfxDestroyProgram(gfx_, debug_rc_program);
+        gfxDestroyKernel(gfx_, debug_rc_kernel);
+    }
 }
 
-void RCTechnique::render([[maybe_unused]] CapsaicinInternal &capsaicin) noexcept 
+void RCTechnique::render([[maybe_unused]] CapsaicinInternal &capsaicin) noexcept
 {
+    // check for options change
+    RenderOptions newOptions = convertOptions(capsaicin.getOptions());
+    bool          recompile  = false;
+    options                  = newOptions;
+    if (recompile)
+    {
+        gfxDestroyProgram(gfx_, rc_program);
+        gfxDestroyKernel(gfx_, rc_kernel);
+
+        initKernel(capsaicin);
+    }
+
+    uint2 buffer_dimensions = uint2(capsaicin.getWidth(), capsaicin.getHeight());
+    gfxProgramSetParameter(gfx_, rc_program, "g_BufferDimensions", buffer_dimensions);
+    gfxProgramSetParameter(gfx_, rc_program, "g_Depth", capsaicin.getAOVBuffer("Depth"));
+    gfxProgramSetParameter(gfx_, rc_program, "o_CascadeTex", capsaicin.getAOVBuffer("rc_probes"));
+
+    gfxCommandBindKernel(gfx_, rc_kernel);
+
+    for (int cascade_level = 5; cascade_level >= 0; cascade_level -= 1)
+    {
+        uint2 probe_count =
+            uint2(buffer_dimensions.x / (8 * 1 << cascade_level), buffer_dimensions.y / (8 * 1 << cascade_level));
+        gfxProgramSetParameter(gfx_, rc_program, "g_cascadeId", cascade_level);
+        gfxProgramSetParameter(gfx_, rc_program, "g_probesCount", probe_count);
+
+
+        uint32_t const *thread_nums = gfxKernelGetNumThreads(gfx_, rc_kernel);
+        uint32_t        x = thread_nums[0], y = thread_nums[1];
+        uint32_t        thread_size_x = uint32_t(glm::ceil(buffer_dimensions.x / float(x)));
+        uint32_t        thread_size_y = uint32_t(glm::ceil(buffer_dimensions.y / float(y * (1 << cascade_level))));
+
+
+        gfxCommandDispatch(gfx_, thread_size_x, thread_size_y, 1); 
+    }
+
+    /*if (capsaicin.getCurrentDebugView() == "RCProbes")
+    {
+        if (!debug_rc_program)
+        {
+            debug_rc_program = gfxCreateProgram(gfx_, "render_techniques/radiance_cascade/debug_rc_probes", capsaicin.getShaderPath());
+            GfxDrawState drawState;
+            gfxDrawStateSetColorTarget(drawState, 0, capsaicin.getAOVBuffer("Debug"));
+            debug_rc_kernel = gfxCreateGraphicsKernel(gfx_, debug_rc_program, drawState);
+        }
+        GfxCommandEvent const commandEvent(gfx_, "DrawDebugRCprobes");
+        gfxProgramSetParameter(gfx_, debug_rc_program, "g_CascadeTex", capsaicin.getAOVBuffer("rc_probes"));
+        gfxCommandBindKernel(gfx_, debug_rc_kernel);
+        gfxCommandDraw(gfx_, 3);
+    }*/
 
 }
 
@@ -58,7 +114,7 @@ AOVList RCTechnique::getAOVs() const noexcept
 DebugViewList RCTechnique::getDebugViews() const noexcept
 {
     DebugViewList dbvs;
-    dbvs.push_back("RCProbes");
+    //dbvs.push_back("RCProbes");
     return dbvs;
 }
 
@@ -73,7 +129,7 @@ bool RCTechnique::initKernel(CapsaicinInternal const& capsaicin) noexcept
     std::vector<char const *> defines;
 
     rc_kernel = gfxCreateComputeKernel(
-        gfx_, rc_program, "RenderAndMergeCascade", defines.data(), defines.size()); // TODO: put entry point name here
+        gfx_, rc_program, "RenderCascades", defines.data(), (uint32_t)defines.size()); // TODO: put entry point name here
     return !!rc_program;
 }
 
