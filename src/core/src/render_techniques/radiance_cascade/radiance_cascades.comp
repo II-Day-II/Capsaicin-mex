@@ -1,14 +1,39 @@
 ﻿
-uint g_cascadeId;
-uint2 g_probesCount; 
+#include "../../gpu_shared.h"
+
 
 Texture2D g_Depth;
 Texture2D g_GeometryNormalBuffer;
-SamplerState g_samplerNearest;
+Texture2D g_VisibilityBuffer;
 
+StructuredBuffer<uint> g_IndexBuffer;
+StructuredBuffer<Instance> g_InstanceBuffer;
+StructuredBuffer<Vertex> g_VertexBuffer;
+StructuredBuffer<Mesh> g_MeshBuffer;
+StructuredBuffer<Material> g_MaterialBuffer;
+StructuredBuffer<float3x4> g_TransformBuffer;
+Texture2D g_TextureMaps[] : register(space99);
+
+RaytracingAccelerationStructure g_Scene;
+
+SamplerState g_NearestSampler;
+SamplerState g_TextureSampler; // Is a linear sampler
+
+
+#include "../../geometry/mesh.hlsl"
+#include "../../geometry/geometry.hlsl"
+#include "../../geometry/ray_tracing.hlsl"
+#include "../../geometry/intersection.hlsl"
+#include "../../geometry/ray_intersection.hlsl"
+#include "../../math/transform.hlsl"
+
+
+
+// rc uniforms
+uint g_cascadeId;
+uint2 g_probesCount; 
 uint2 g_BufferDimensions;
 RWTexture2D<float4> o_CascadeTex;
-
 
 // Cascade Layout
 // Rows - depth angled rays
@@ -27,15 +52,32 @@ RWTexture2D<float4> o_CascadeTex;
 // |_↗_|_↑_|_↖_|_←_|_↙_|_↓_|_↘_|_↗_|
 // |_↗_|_↑_|_↖_|_←_|_↙_|_↓_|_↘_|_↗_|
 
-float GetProbeDepth(float2 uv, uint cascade_level)
+float3 GetRay_DirectionFirst(float2 angleId, float cascadeLevel)
 {
-    //return g_Depth.Sample(g_samplerNearest, uv);
-    return g_Depth.SampleLevel(g_samplerNearest, uv, cascade_level + 1); // TODO: does this require Hi-Z?
+    float deltaAngle = TWO_PI * pow(0.5f, cascadeLevel) * 0.125f; // 1/8
+    // Azimuth
+    float phi = (angleId.x + 0.5f) * deltaAngle;
+    // Polar
+    float theta = lerp(0.4f, 0.6f, angleId.y * 0.33334f) * PI;
+
+    float2 sinCosPhi;
+    float2 sinCosTheta;
+    sincos(phi, sinCosPhi.x, sinCosPhi.y);
+    sincos(theta, sinCosTheta.x, sinCosTheta.y);
+
+    return float3(sinCosTheta.x * sinCosPhi.y, sinCosTheta.y, sinCosTheta.x * sinCosPhi.x);
 }
 
-float GetProbeNormal(uint2 coord)
+float GetProbeDepth(uint2 coord, uint cascade_level)
 {
-    return g_GeometryNormalBuffer.Load(int3(coord, 0));
+    //return g_Depth.Sample(g_samplerNearest, uv);
+    return g_Depth.Load(int3(coord, cascade_level + 1)).r;
+    //return g_Depth.SampleLevel(g_samplerNearest, uv, cascade_level + 1); // TODO: does this require Hi-Z?
+}
+
+float3 GetProbeNormal(uint2 coord)
+{
+    return g_GeometryNormalBuffer.Load(int3(coord, 0)).xyz;
 }
 
 // TODO: figure out how I want to structure interval lengths
@@ -47,13 +89,36 @@ float2 GetInterval(uint cascade_index)
     return float2(start, end);
 }
 
-RayDesc GetRay(float2 probeCenterUv, float probeDepth, float3 probeNormal, uint cascade_index)
+float3 GetRayOrigin(float2 coord, float3 normal)
+{
+    float4 visibility = g_VisibilityBuffer.Load(int3(coord, 0));
+    //return visibility.xyz;
+    float2 barycentrics = visibility.xy;
+    uint instanceID = asuint(visibility.z);
+    uint primitiveID = asuint(visibility.w);
+
+    Instance instance = g_InstanceBuffer[instanceID];
+    Mesh mesh = g_MeshBuffer[instance.mesh_index];
+    float3x4 transform = g_TransformBuffer[instance.transform_index];
+
+    Triangle vertices = fetchVertices(mesh, primitiveID);
+    float3 v0 = transformPoint(vertices.v0, transform);
+    float3 v1 = transformPoint(vertices.v1, transform);
+    float3 v2 = transformPoint(vertices.v2, transform);
+
+    float3 world = interpolate(v0, v1, v2, barycentrics);
+    float3 origin = offsetPosition(world, normal);
+    return origin;
+}
+
+RayDesc GetRay(uint2 probeCenterCoord, float2 angleId, float3 probeNormal, uint cascade_index)
 {
     RayDesc ray_desc;
     float2 interval = GetInterval(cascade_index);
     ray_desc.TMin = interval.x;
     ray_desc.TMax = interval.y;
-    // TODO: origin and direction
+    ray_desc.Direction = GetRay_DirectionFirst(angleId, cascade_index);
+    ray_desc.Origin = GetRayOrigin(probeCenterCoord, probeNormal);
     return ray_desc;
 }
 
@@ -62,8 +127,9 @@ RayDesc GetRay(float2 probeCenterUv, float probeDepth, float3 probeNormal, uint 
 void RenderCascades(uint3 did : SV_DispatchThreadID)
 {
     int2 coords = int2(did.xy);
-    //float2 uv = float2(coords) / float2(g_BufferDimensions);
-    //o_CascadeTex[coords] = float4(uv, 0.025, 1.0);
+    //if (true)
+    //{ float2 uv = float2(coords) / float2(g_BufferDimensions); o_CascadeTex[coords] = float4(uv, 0.025, 1.0); return; }
+    
     int2 targetCoords = coords + int2(0, 4 * g_probesCount.y);
     if (coords.x >= g_BufferDimensions.x || coords.y >= 4 * g_probesCount.y)
     {
@@ -71,6 +137,7 @@ void RenderCascades(uint3 did : SV_DispatchThreadID)
     }
     int2 probeCenterCoord = coords % g_probesCount;
     float2 probeCenterUV = float2(probeCenterCoord + 1) / float2(g_probesCount + 1);
+    int2 probeCenterTexelSpace = probeCenterUV * g_BufferDimensions;
     
     const float cascadeLevel = float(g_cascadeId);
     
@@ -78,19 +145,36 @@ void RenderCascades(uint3 did : SV_DispatchThreadID)
     const float projRays = 8.0 * cascadeFactor;
     const float depthRays = floor(4.0 * 2.0 * cascadeFactor);
     float2 angleId = float2(floor(coords.x * projRays / float(g_BufferDimensions.x)), fmod(floor(1.0 - (coords.y + 1.0) / float(g_BufferDimensions.y)) * depthRays, 4.0));
-    float probeDepth = GetProbeDepth(probeCenterUV, cascadeLevel);
-    float probeNormal = GetProbeNormal(probeCenterCoord);
+    
+    float probeDepth = GetProbeDepth(probeCenterTexelSpace, cascadeLevel);
+    float3 probeNormal = GetProbeNormal(probeCenterTexelSpace);
     bool is_sky_pixel = dot(probeNormal, probeNormal) == 0.0f;
     
+    //if (false)
     if (is_sky_pixel)
     {
-        o_CascadeTex[targetCoords] = float4(float3(0.0), 1.0);
+        o_CascadeTex[targetCoords] = float4(0.0, 0.0, 0.0, 1.0);
         return;
     }
     
     // trace some rays
-    RayDesc ray = GetRay(probeCenterUV, probeDepth, probeNormal, g_cascadeId);
+    RayDesc ray = GetRay(probeCenterTexelSpace, probeDepth, probeNormal, g_cascadeId);
     // TODO: figure out rays 
+    ClosestRayQuery query = TraceRay<ClosestRayQuery>(ray);
     
-    o_CascadeTex[targetCoords] = float4(probeCenterUV, 0.0, 1.0);
+    if (query.CommittedStatus() == COMMITTED_TRIANGLE_HIT) // ray hit something
+    {
+        float t = query.CommittedRayT();
+        HitInfo hit = GetHitInfoRtInlineCommitted(query);
+        IntersectData idata = MakeIntersectData(hit);
+        o_CascadeTex[targetCoords] = float4(t, idata.uv, 1.0);
+        return;
+    }
+    else // hit nothing
+    {
+        o_CascadeTex[targetCoords] = float4(0, 0, 0, 1);
+    }
+    
+    
+    
 }

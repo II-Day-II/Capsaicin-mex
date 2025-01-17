@@ -44,8 +44,28 @@ void RCTechnique::render([[maybe_unused]] CapsaicinInternal &capsaicin) noexcept
 
     uint2 buffer_dimensions = uint2(capsaicin.getWidth(), capsaicin.getHeight());
     gfxProgramSetParameter(gfx_, rc_program, "g_BufferDimensions", buffer_dimensions);
-    gfxProgramSetParameter(gfx_, rc_program, "g_Depth", capsaicin.getAOVBuffer("Depth"));
+
+    gfxProgramSetParameter(gfx_, rc_program, "g_Scene", capsaicin.getAccelerationStructure());
+
+    gfxProgramSetParameter(
+        gfx_, rc_program, "g_TextureMaps", capsaicin.getTextures(), capsaicin.getTextureCount());
+
+    gfxProgramSetParameter(gfx_, rc_program, "g_NearestSampler", capsaicin.getNearestSampler());
+    gfxProgramSetParameter(gfx_, rc_program, "g_LinearSampler", capsaicin.getLinearSampler());
+    gfxProgramSetParameter(gfx_, rc_program, "g_TextureSampler", capsaicin.getLinearSampler());
+
+    gfxProgramSetParameter(gfx_, rc_program, "g_Depth", capsaicin.getAOVBuffer("VisibilityDepth"));
+    gfxProgramSetParameter(
+        gfx_, rc_program, "g_GeometryNormalBuffer", capsaicin.getAOVBuffer("GeometryNormal"));
+    gfxProgramSetParameter(gfx_, rc_program, "g_VisibilityBuffer", capsaicin.getAOVBuffer("Visibility"));
     gfxProgramSetParameter(gfx_, rc_program, "o_CascadeTex", capsaicin.getAOVBuffer("rc_probes"));
+    gfxProgramSetParameter(gfx_, rc_program, "g_IndexBuffer", capsaicin.getIndexBuffer());
+    gfxProgramSetParameter(gfx_, rc_program, "g_VertexBuffer", capsaicin.getVertexBuffer());
+
+    gfxProgramSetParameter(gfx_, rc_program, "g_MeshBuffer", capsaicin.getMeshBuffer());
+    gfxProgramSetParameter(gfx_, rc_program, "g_InstanceBuffer", capsaicin.getInstanceBuffer());
+    gfxProgramSetParameter(gfx_, rc_program, "g_MaterialBuffer", capsaicin.getMaterialBuffer());
+    gfxProgramSetParameter(gfx_, rc_program, "g_TransformBuffer", capsaicin.getTransformBuffer());
 
     gfxCommandBindKernel(gfx_, rc_kernel);
 
@@ -105,9 +125,11 @@ ComponentList RCTechnique::getComponents() const noexcept
 AOVList RCTechnique::getAOVs() const noexcept
 {
     AOVList aovs;
-    aovs.push_back({"Depth", AOV::Read});
-    aovs.push_back({"ShadingNormal", AOV::Read});
-    aovs.push_back({"rc_probes", AOV::Write, AOV::Clear, DXGI_FORMAT_R8G8B8A8_UNORM});
+    aovs.push_back({"VisibilityDepth", AOV::Read});
+    aovs.push_back({"GeometryNormal", AOV::Read});
+    aovs.push_back({"Visibility", AOV::Read});
+    //aovs.push_back({"rc_probes", AOV::Write, AOV::Clear, DXGI_FORMAT_R8G8B8A8_UNORM});
+    aovs.push_back({"rc_probes", AOV::Write, AOV::Clear, DXGI_FORMAT_R16G16B16A16_FLOAT});
     return aovs;
 }
 
