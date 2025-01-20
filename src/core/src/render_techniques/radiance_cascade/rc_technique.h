@@ -1,4 +1,5 @@
 #include "render_technique.h"
+#include "gpu_shared.h"
 
 namespace Capsaicin
 {
@@ -76,6 +77,8 @@ protected:
 
     RenderOptions options;
     GfxKernel     rc_kernel;
+    GfxKernel     rc_intermediate_kernel;
+    GfxKernel     rc_finalize_kernel; 
     GfxProgram    rc_program;
 
     GfxKernel     debug_rc_kernel;

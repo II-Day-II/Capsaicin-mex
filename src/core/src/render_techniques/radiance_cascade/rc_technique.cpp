@@ -21,12 +21,15 @@ void RCTechnique::terminate() noexcept
 {
     gfxDestroyProgram(gfx_, rc_program);
     gfxDestroyKernel(gfx_, rc_kernel);
+    gfxDestroyKernel(gfx_, rc_intermediate_kernel);
+    gfxDestroyKernel(gfx_, rc_finalize_kernel);
     if (!!debug_rc_program)
     {
         gfxDestroyProgram(gfx_, debug_rc_program);
         gfxDestroyKernel(gfx_, debug_rc_kernel);
     }
 }
+
 
 void RCTechnique::render([[maybe_unused]] CapsaicinInternal &capsaicin) noexcept
 {
@@ -41,6 +44,11 @@ void RCTechnique::render([[maybe_unused]] CapsaicinInternal &capsaicin) noexcept
 
         initKernel(capsaicin);
     }
+
+    gfxProgramSetParameter(gfx_, rc_program, "o_CascadeTex", capsaicin.getAOVBuffer("rc_probes"));
+    gfxProgramSetParameter(
+        gfx_, rc_program, "o_IntermediateCascade", capsaicin.getAOVBuffer("rc_intermediate"));
+    gfxProgramSetParameter(gfx_, rc_program, "o_FinalCascade", capsaicin.getAOVBuffer("rc_final"));
 
     uint2 buffer_dimensions = uint2(capsaicin.getWidth(), capsaicin.getHeight());
     gfxProgramSetParameter(gfx_, rc_program, "g_BufferDimensions", buffer_dimensions);
@@ -58,7 +66,6 @@ void RCTechnique::render([[maybe_unused]] CapsaicinInternal &capsaicin) noexcept
     gfxProgramSetParameter(
         gfx_, rc_program, "g_GeometryNormalBuffer", capsaicin.getAOVBuffer("GeometryNormal"));
     gfxProgramSetParameter(gfx_, rc_program, "g_VisibilityBuffer", capsaicin.getAOVBuffer("Visibility"));
-    gfxProgramSetParameter(gfx_, rc_program, "o_CascadeTex", capsaicin.getAOVBuffer("rc_probes"));
     gfxProgramSetParameter(gfx_, rc_program, "g_IndexBuffer", capsaicin.getIndexBuffer());
     gfxProgramSetParameter(gfx_, rc_program, "g_VertexBuffer", capsaicin.getVertexBuffer());
 
@@ -86,7 +93,17 @@ void RCTechnique::render([[maybe_unused]] CapsaicinInternal &capsaicin) noexcept
         gfxCommandDispatch(gfx_, thread_size_x, thread_size_y, 1); 
     }
 
-    /*if (capsaicin.getCurrentDebugView() == "RCProbes")
+    //gfxCommandBindKernel(gfx_, rc_intermediate_kernel);
+    //gfxCommandDispatch(gfx_, buffer_dimensions.x / 8, buffer_dimensions.y / 8, 1);
+    gfxCommandCopyTexture(
+        gfx_, capsaicin.getAOVBuffer("rc_intermediate"), capsaicin.getAOVBuffer("rc_probes"));
+    
+    gfxCommandBindKernel(gfx_, rc_finalize_kernel);
+    gfxCommandDispatch(gfx_, buffer_dimensions.x / 8, buffer_dimensions.y / 8, 1);
+
+
+
+    if (capsaicin.getCurrentDebugView() == "RCProbes")
     {
         if (!debug_rc_program)
         {
@@ -96,10 +113,10 @@ void RCTechnique::render([[maybe_unused]] CapsaicinInternal &capsaicin) noexcept
             debug_rc_kernel = gfxCreateGraphicsKernel(gfx_, debug_rc_program, drawState);
         }
         GfxCommandEvent const commandEvent(gfx_, "DrawDebugRCprobes");
-        gfxProgramSetParameter(gfx_, debug_rc_program, "g_CascadeTex", capsaicin.getAOVBuffer("rc_probes"));
+        gfxProgramSetParameter(gfx_, debug_rc_program, "g_CascadeTex", capsaicin.getAOVBuffer("rc_final"));
         gfxCommandBindKernel(gfx_, debug_rc_kernel);
         gfxCommandDraw(gfx_, 3);
-    }*/
+    }
 
 }
 
@@ -129,14 +146,16 @@ AOVList RCTechnique::getAOVs() const noexcept
     aovs.push_back({"GeometryNormal", AOV::Read});
     aovs.push_back({"Visibility", AOV::Read});
     //aovs.push_back({"rc_probes", AOV::Write, AOV::Clear, DXGI_FORMAT_R8G8B8A8_UNORM});
-    aovs.push_back({"rc_probes", AOV::Write, AOV::Clear, DXGI_FORMAT_R16G16B16A16_FLOAT});
+    aovs.push_back({"rc_probes", AOV::ReadWrite, AOV::Clear, DXGI_FORMAT_R16G16B16A16_FLOAT});
+    aovs.push_back({"rc_intermediate", AOV::ReadWrite, AOV::Clear, DXGI_FORMAT_R16G16B16A16_FLOAT});
+    aovs.push_back({"rc_final", AOV::Write, AOV::Clear, DXGI_FORMAT_R16G16B16A16_FLOAT});
     return aovs;
 }
 
 DebugViewList RCTechnique::getDebugViews() const noexcept
 {
     DebugViewList dbvs;
-    //dbvs.push_back("RCProbes");
+    dbvs.push_back("RCProbes");
     return dbvs;
 }
 
@@ -152,6 +171,12 @@ bool RCTechnique::initKernel(CapsaicinInternal const& capsaicin) noexcept
 
     rc_kernel = gfxCreateComputeKernel(
         gfx_, rc_program, "RenderCascades", defines.data(), (uint32_t)defines.size()); // TODO: put entry point name here
+
+    rc_intermediate_kernel =
+        gfxCreateComputeKernel(gfx_, rc_program, "MergeCascades", defines.data(), (uint32_t)defines.size());
+
+    rc_finalize_kernel =
+        gfxCreateComputeKernel(gfx_, rc_program, "AintNoWayINeedAnotherPass", defines.data(), (uint32_t)defines.size());
     return !!rc_program;
 }
 

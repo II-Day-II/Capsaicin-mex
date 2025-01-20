@@ -52,6 +52,7 @@ RWTexture2D<float4> o_CascadeTex;
 // |_↗_|_↑_|_↖_|_←_|_↙_|_↓_|_↘_|_↗_|
 // |_↗_|_↑_|_↖_|_←_|_↙_|_↓_|_↘_|_↗_|
 
+// TODO: decipher this
 float3 GetRay_DirectionFirst(float2 angleId, float cascadeLevel)
 {
     float deltaAngle = TWO_PI * pow(0.5f, cascadeLevel) * 0.125f; // 1/8
@@ -80,10 +81,50 @@ float3 GetProbeNormal(uint2 coord)
     return g_GeometryNormalBuffer.Load(int3(coord, 0)).xyz;
 }
 
+float4 LoadUpperCascadeBilinear(uint2 coords, float2 weights)
+{
+    float4 a = o_CascadeTex[coords];
+    float4 b = o_CascadeTex[coords + int2(1, 0)];
+    float4 c = o_CascadeTex[coords + int2(0, 1)];
+    float4 d = o_CascadeTex[coords + int2(1, 1)];
+
+    float4 e = lerp(a, b, weights.x);
+    float4 f = lerp(c, d, weights.x);
+
+    return lerp(e, f, weights.y);
+}
+
+float4 LoadUpperRadiance(uint2 coords)
+{
+    const uint2 lowerCascadeSize = g_probesCount;
+    const uint2 upperCascadeSize = g_probesCount * 0.5;
+    uint2 upperCascadeCoords = floor(coords * 0.5);
+    
+    // TODO: decipher this shit
+    uint2 lowerProbeId = coords % lowerCascadeSize;
+    uint2 upperProbeBottomLeftId = clamp(floor((lowerProbeId - 1) * 0.5f), 0, upperCascadeSize - 2);
+    float2 bilinearWeight = saturate(fmod((lowerProbeId - 1) * 0.5f, 1.0f) + 0.25f);
+    
+    upperCascadeCoords = upperCascadeCoords / upperCascadeSize * upperCascadeSize;
+    upperCascadeCoords.x *= 2;
+    upperCascadeCoords += upperProbeBottomLeftId;
+    upperCascadeCoords.y += upperCascadeSize.y * 4;
+
+    int2 offset = int2(upperCascadeSize.x, 0);
+
+    float4 upperRadiance = 0.0f;
+
+    // NOTE: Sample 2 main rays
+    upperRadiance += LoadUpperCascadeBilinear(upperCascadeCoords, bilinearWeight);
+    upperRadiance += LoadUpperCascadeBilinear(upperCascadeCoords + offset, bilinearWeight);
+    
+    return upperRadiance * 0.5; // ???
+}
+
 // TODO: figure out how I want to structure interval lengths
 float2 GetInterval(uint cascade_index)
 {
-    const float factor = 0.01;
+    const float factor = 1.0;
     float start = pow(2, cascade_index) * factor;
     float end = pow(2, cascade_index + 1) * factor;
     return float2(start, end);
@@ -122,13 +163,23 @@ RayDesc GetRay(uint2 probeCenterCoord, float2 angleId, float3 probeNormal, uint 
     return ray_desc;
 }
 
+float4 GetRadiance(IntersectData idata)
+{
+    return float4(idata.position, 1.0);
+
+}
+
 
 [numthreads(8,4,1)]
 void RenderCascades(uint3 did : SV_DispatchThreadID)
 {
+    // TODO: rearrange how we store this
     int2 coords = int2(did.xy);
     //if (true)
     //{ float2 uv = float2(coords) / float2(g_BufferDimensions); o_CascadeTex[coords] = float4(uv, 0.025, 1.0); return; }
+    
+    // TODO: place probes on min/max depth of each probe size area of buffer; figure out how to store and merge that
+    
     
     int2 targetCoords = coords + int2(0, 4 * g_probesCount.y);
     if (coords.x >= g_BufferDimensions.x || coords.y >= 4 * g_probesCount.y)
@@ -162,19 +213,109 @@ void RenderCascades(uint3 did : SV_DispatchThreadID)
     // TODO: figure out rays 
     ClosestRayQuery query = TraceRay<ClosestRayQuery>(ray);
     
+    float4 radiance = float4(0.0, 0.0, 0.0, 1.0);
+    
     if (query.CommittedStatus() == COMMITTED_TRIANGLE_HIT) // ray hit something
     {
         float t = query.CommittedRayT();
         HitInfo hit = GetHitInfoRtInlineCommitted(query);
         IntersectData idata = MakeIntersectData(hit);
-        o_CascadeTex[targetCoords] = float4(t, idata.uv, 1.0);
+        // TODO: get radiance from hit surface
+        radiance.rgb = GetRadiance(idata).rgb;
+        radiance.a = 0.0; // occluded
+        if(g_cascadeId < 4) // not final one
+        {
+            o_CascadeTex[targetCoords] = radiance;
+            return;
+        }
+        float4 upperRadiance = LoadUpperRadiance(coords);
+        radiance.rgb += upperRadiance.rgb * radiance.a;
+        radiance.a *= upperRadiance.a;
+        o_CascadeTex[targetCoords] = radiance;
+        //o_CascadeTex[targetCoords] = float4(t, idata.uv, 1.0);
         return;
     }
     else // hit nothing
     {
-        o_CascadeTex[targetCoords] = float4(0, 0, 0, 1);
+        // TODO: sample env. map
+        o_CascadeTex[targetCoords] = float4(2, 2, 2, 1);
     }
     
-    
-    
 }
+
+RWTexture2D<float4> o_IntermediateCascade;
+
+[numthreads(8,8,1)]
+void MergeCascades(uint3 did : SV_DispatchThreadID)
+{
+    // TODO: wtf is all this
+    uint2 targetCoords = did.xy;
+    float4 texSizes = float4(g_BufferDimensions.xy, 1.0 / g_BufferDimensions.xy);
+    
+    float2 sideId = floor(2 * did.xy * texSizes.zw);
+    float side = sideId.x + sideId.y * 2;
+    uint2 coords = fmod(did.xy * 2, texSizes.xy) * 0.25;
+    coords.y += 7.0 * 0.125 * texSizes.y;
+    coords.x += side * texSizes.x * 0.25;
+    float2 weight = max(0.0, frac(did.xy * 0.25) - 0.25);
+    int2 offset = int2(0, -texSizes.y * 0.125);
+    float2 uv = frac(2.0 * texSizes.zw * did.xy);
+    //float3 normal = g_GeometryNormalBuffer.Sample(g_TextureSampler, uv).xyz; // ???
+    float3 normal = g_GeometryNormalBuffer.Load(int3(uv * texSizes.xy, 0)).xyz;
+    float4 radiance = 0.0;
+    uint2 c = coords;
+    for (uint i = 0; i < 4; i++)
+    {
+        float2 angleId = float2(side * 2.0, i);
+        float3 dir = GetRay_DirectionFirst(angleId, 0);
+        radiance += LoadUpperCascadeBilinear(c, weight) * saturate(dot(dir, normal));
+        c.y += offset.y;
+    }
+    c = coords + uint2(texSizes.x * 0.125, 0);
+    for (uint ii = 0; ii < 4; ii++)
+    {
+        float2 angleId = float2(side * 2 + 1, ii);
+        float3 dir = GetRay_DirectionFirst(angleId, 0);
+        radiance += LoadUpperCascadeBilinear(c, weight) * saturate(dot(dir, normal));
+        c.y += offset.y;
+    }
+    o_IntermediateCascade[targetCoords] = radiance * 0.5;
+}
+
+//RWTexture2D<float4> o_IntermediateCascade2;
+RWTexture2D<float4> o_FinalCascade;
+
+[numthreads(8,8,1)]
+void AintNoWayINeedAnotherPass(uint3 did : SV_DispatchThreadID)
+{
+    // fucking do it again lmao???
+    float3 normal_ = g_GeometryNormalBuffer.Load(int3(did.xy, 0)).xyz;
+    float4 color = 0.0;
+    for (uint x = 0; x < 8; x++)
+    {
+        for (uint y = 0; y < 4; y++)
+        {
+            float3 dir = GetRay_DirectionFirst(float2(x, y), 0);
+            float NdotL = saturate(dot(normal_, dir));
+            float4 radiance = o_IntermediateCascade[did.xy + uint2(x, -y) * g_BufferDimensions.xy * 0.125];
+            color += radiance * NdotL;
+        }
+    }
+    o_FinalCascade[did.xy] = color;
+    return;
+}
+
+
+[numthreads(8,8,1)]
+void FinalPassForReal(uint3 did: SV_DispatchThreadID)
+{
+    float4 texSizes = float4(g_BufferDimensions.xy, 1.0 / g_BufferDimensions.xy);
+    int3 cascadeSizeOffset = int3(round(0.5 * texSizes.zw), 0);
+    int2 coords = floor(did.xy * 0.5);
+    float4 r = o_IntermediateCascade[coords];
+    r += o_IntermediateCascade[coords + cascadeSizeOffset.xz];
+    r += o_IntermediateCascade[coords + cascadeSizeOffset.zy];
+    r += o_IntermediateCascade[coords + cascadeSizeOffset.xy];
+    o_FinalCascade[did.xy] = r;
+}
+
