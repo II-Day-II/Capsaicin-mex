@@ -18,6 +18,8 @@ public:
     struct RenderOptions
     {
         // TODO: put parameters here, e.g. min/max bounds
+        uint rc_cascade_count = 5;
+        uint rc_debug_cascade_stop = 0;
     };
 
     /**
@@ -77,9 +79,11 @@ protected:
 
     RenderOptions options;
     GfxKernel     rc_kernel;
-    GfxKernel     rc_intermediate_kernel;
-    GfxKernel     rc_finalize_kernel; 
+    //GfxKernel     rc_intermediate_kernel;
+    //GfxKernel     rc_finalize_kernel; 
     GfxProgram    rc_program;
+
+    GfxTexture rc_pingpong_textures[2];
 
     GfxKernel     debug_rc_kernel;
     GfxProgram    debug_rc_program;

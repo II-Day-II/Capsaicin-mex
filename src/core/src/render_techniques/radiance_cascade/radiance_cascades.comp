@@ -26,6 +26,7 @@ SamplerState g_TextureSampler; // Is a linear sampler
 #include "../../geometry/intersection.hlsl"
 #include "../../geometry/ray_intersection.hlsl"
 #include "../../math/transform.hlsl"
+#include "../../math/sampling.hlsl"
 
 
 
@@ -167,6 +168,92 @@ float4 GetRadiance(IntersectData idata)
 {
     return float4(idata.position, 1.0);
 
+}
+
+
+Texture2D g_lastCascade;
+RWTexture2D<float4> o_currentCascade;
+uint2 g_CascadeTexDimensions;
+
+[numthreads(8,8,1)]
+void PingPongCascades(uint3 did : SV_DispatchThreadID)
+{
+    const uint2 coord = did.xy;
+    const float base = 4.0; // TODO: redo this, maybe use probe count instead?
+    const float sqrt_base = sqrt(base);
+    const float cascade_index = g_cascadeId;
+    const float2 resolution = g_CascadeTexDimensions;
+    const float2 one_over_res = 1.0 / resolution;
+    const float shortest_side = min(resolution.x, resolution.y);
+    const float2 aspect = shortest_side * one_over_res;
+    const bool is_cascade_0 = g_cascadeId == 0;
+    float spacing = pow(sqrt_base, cascade_index); // spacing between probes 
+    uint2 num_probes = floor(resolution / spacing); // number of probes in x/y directions
+    uint2 probe_rel_pos = coord % num_probes; // [0, res/spacing] position of the pixel in the probe we're doing this pass
+    uint2 ray_pos = coord / num_probes; // [0, num_probes] ray id of this pass - which direction will we be tracing?
+    uint base_idx = base * (ray_pos.x + spacing * ray_pos.y);
+    float2 probe_center = (probe_rel_pos + 0.5) * spacing; // [0, resolution]
+    float2 probe_center_uv = probe_center * one_over_res; // [0, 1]
+    
+    //o_currentCascade[did.xy] = float4(probe_center_uv, 0, 1);
+    //return;
+    
+    float3 direction = mapToHemiOctahedronInverse(probe_center_uv); // +hemisphere ray direction. Now to rotate the direction according to normal...
+    float3 normal = 2.0 * g_GeometryNormalBuffer.Load(int3(probe_center_uv * g_BufferDimensions, 0)).xyz - 1.0;
+    
+    //o_currentCascade[did.xy] = float4(normal, 1);
+    //return;
+    
+    bool is_sky_pixel = dot(normal, normal) == 0.0;
+    if (is_sky_pixel)
+    {
+        o_currentCascade[did.xy] = float4(0, 0, 0, 1);
+        return; // sky pixel
+    }
+    RayDesc ray = GetRay(probe_center, probe_center, normal, cascade_index);
+    
+    //o_currentCascade[did.xy] = float4(direction, 1);
+    //return;
+    
+    float3 b1, b2;
+    GetOrthoVectors(normal, b1, b2);
+    direction = direction.x * b1 + direction.y * b2 + direction.z * normal;
+    
+     // TODO: figure out rays 
+    ClosestRayQuery query = TraceRay<ClosestRayQuery>(ray);
+    
+    float4 radiance = float4(0.0, 0.0, 0.0, 1.0);
+    
+    if (query.CommittedStatus() == COMMITTED_TRIANGLE_HIT) // ray hit something
+    {
+        float t = query.CommittedRayT();
+        HitInfo hit = GetHitInfoRtInlineCommitted(query);
+        IntersectData idata = MakeIntersectData(hit);
+        // TODO: get radiance from hit surface
+        radiance.rgb = GetRadiance(idata).rgb;
+        radiance.a = 0.0; // occluded
+    }
+    else // hit nothing
+    {
+        // TODO: sample env. map
+        radiance = float4(2, 2, 2, 1);
+    }
+    
+    if (!is_cascade_0)
+    {
+        float upper_spacing = pow(sqrt_base, cascade_index + 1);
+        float2 upper_probe_count = floor(resolution / upper_spacing);
+        float2 upper_pos = float2(fmod(base_idx, upper_spacing), floor(base_idx / upper_spacing)) * upper_probe_count;
+        
+        float2 offset = (probe_rel_pos + 0.5) / sqrt_base;
+        float2 clamped = clamp(offset, 0.5.xx, upper_probe_count - 0.5);
+        float4 upperRadiance = g_lastCascade.Load(int3(clamped, 0)); // TODO: Depth aware upscaling...
+        radiance.rgb += upperRadiance.rgb * radiance.a;
+        radiance.a *= upperRadiance.a;
+    }
+    o_CascadeTex[did.xy] = radiance;
+    return;
+    
 }
 
 
