@@ -88,19 +88,26 @@ void RCTechnique::render([[maybe_unused]] CapsaicinInternal &capsaicin) noexcept
     {
         bool  ping_pong   = cascade_level % 2 == 0;
         uint2 probe_count =
-            uint2(cascade_dimensions.x / (8 * 1 << cascade_level), cascade_dimensions.y / (8 * 1 << cascade_level));
+            // uint2(cascade_dimensions.x / (8 * 1 << cascade_level),
+            //     cascade_dimensions.y / (8 * 1 << cascade_level));
+            uint2(buffer_dimensions.x / (8 * 1 << cascade_level),
+                buffer_dimensions.y / (8 * 1 << cascade_level));
         gfxProgramSetParameter(gfx_, rc_program, "g_cascadeId", cascade_level);
         gfxProgramSetParameter(gfx_, rc_program, "g_probesCount", probe_count);
         
-        gfxProgramSetParameter(gfx_, rc_program, "g_lastCascade", rc_pingpong_textures[ping_pong ? 0 : 1]);
-        gfxProgramSetParameter(gfx_, rc_program, "o_currentCascade", rc_pingpong_textures[ping_pong ? 1 : 0]);
+        //gfxProgramSetParameter(gfx_, rc_program, "g_lastCascade", rc_pingpong_textures[ping_pong ? 0 : 1]);
+        //gfxProgramSetParameter(gfx_, rc_program, "o_currentCascade", rc_pingpong_textures[ping_pong ? 1 : 0]);
 
+        gfxProgramSetParameter(gfx_, rc_program, "g_lastCascade", capsaicin.getAOVBuffer(ping_pong ? "rc_probes0" : "rc_probes1"));
+        gfxProgramSetParameter(gfx_, rc_program, "o_currentCascade", capsaicin.getAOVBuffer(ping_pong ? "rc_probes1" : "rc_probes0"));
 
         uint32_t const *thread_nums = gfxKernelGetNumThreads(gfx_, rc_kernel);
         uint32_t        x = thread_nums[0], y = thread_nums[1];
-        uint32_t        thread_size_x = uint32_t(glm::ceil(cascade_dimensions.x / float(x)));
-        uint32_t        thread_size_y = uint32_t(glm::ceil(cascade_dimensions.y / float(y)));
-
+        //uint32_t        thread_size_x = uint32_t(glm::ceil(cascade_dimensions.x / float(x)));
+        //uint32_t        thread_size_y = uint32_t(glm::ceil(cascade_dimensions.y / float(y)));
+        
+        uint32_t        thread_size_x = uint32_t(glm::ceil(buffer_dimensions.x / float(x)));
+        uint32_t        thread_size_y = uint32_t(glm::ceil(buffer_dimensions.y / float(y)));
 
         gfxCommandDispatch(gfx_, thread_size_x, thread_size_y, 1); 
     }
