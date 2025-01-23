@@ -81,6 +81,7 @@ void RCTechnique::render([[maybe_unused]] CapsaicinInternal &capsaicin) noexcept
     gfxProgramSetParameter(gfx_, rc_program, "g_InstanceBuffer", capsaicin.getInstanceBuffer());
     gfxProgramSetParameter(gfx_, rc_program, "g_MaterialBuffer", capsaicin.getMaterialBuffer());
     gfxProgramSetParameter(gfx_, rc_program, "g_TransformBuffer", capsaicin.getTransformBuffer());
+    gfxProgramSetParameter(gfx_, rc_program, "g_EnvironmentBuffer", capsaicin.getEnvironmentBuffer());
 
     gfxCommandBindKernel(gfx_, rc_kernel);
 

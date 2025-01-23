@@ -12,6 +12,8 @@ StructuredBuffer<Vertex> g_VertexBuffer;
 StructuredBuffer<Mesh> g_MeshBuffer;
 StructuredBuffer<Material> g_MaterialBuffer;
 StructuredBuffer<float3x4> g_TransformBuffer;
+
+TextureCube g_EnvironmentBuffer;
 Texture2D g_TextureMaps[] : register(space99);
 
 RaytracingAccelerationStructure g_Scene;
@@ -27,6 +29,7 @@ SamplerState g_TextureSampler; // Is a linear sampler
 #include "../../geometry/ray_intersection.hlsl"
 #include "../../math/transform.hlsl"
 #include "../../math/sampling.hlsl"
+#include "../../materials/material_evaluation.hlsl"
 
 
 
@@ -122,14 +125,78 @@ float4 LoadUpperRadiance(uint2 coords)
     return upperRadiance * 0.5; // ???
 }
 
-// TODO: figure out how I want to structure interval lengths
-float2 GetInterval(uint cascade_index)
+float IntervalScale(uint cascade_index)
 {
-    const float factor = 1.0;
-    float start = pow(2, cascade_index) * factor;
-    float end = pow(2, cascade_index + 1) * factor;
-    return float2(start, end);
+    if (cascade_index == 0)
+        return 0.0;
+    return pow(2.0, cascade_index);
+    return float(1u << (1u * cascade_index));
 }
+
+// TODO: figure out how I want to structure interval lengths
+float2 GetInterval(uint cascade_index, float base_length)
+{
+    return base_length * float2(IntervalScale(cascade_index), IntervalScale(cascade_index + 1));
+}
+
+float4 MergeInterval(float4 near, float4 far)
+{
+    const float3 radiance = near.rgb + (far.rgb * near.a);
+    return float4(radiance, near.a * far.a);
+}
+
+float4 BilinearWeights(float2 ratio)
+{
+    return float4(
+          (1.0 - ratio.x) * (1.0 - ratio.y)
+        , ratio.x * (1.0 - ratio.y)
+        , (1.0 - ratio.x) * ratio.y
+        , ratio.x * ratio.y
+    );
+}
+
+/*
+@param dest_center the center position of the destination probe in pixels
+@param bilinear_size the size of the bilinear probe in pixels
+*/
+void BilinearSamples(float2 dest_center, float2 bilinear_size, out float4 weights, out uint2 base_idx)
+{
+    // coord of top left bilinear probe when floored
+    const float2 base_coord = (dest_center / bilinear_size) - float2(0.5, 0.5);
+    const float2 ratio = frac(base_coord); // sub-bilinear probe pos
+    weights = BilinearWeights(ratio);
+    base_idx = uint2(floor(base_coord)); // top left bilinear probe coordinate
+}
+
+uint2 BilinearOffset(uint i)
+{
+    const uint2 offsets[4] = { uint2(0, 0), uint2(1, 0), uint2(0, 1), uint2(1, 1) };
+    return offsets[i];
+}
+
+float4 MergeBilinear(float2 dest_center, float2 bilinear_size)
+{
+    float4 weights; 
+    uint2 base_index;
+    BilinearSamples(dest_center, bilinear_size, weights, base_index);
+    
+    float4 merged = float4(0, 0, 0, 1);
+    for (uint d = 0; d < 4; d++)
+    {
+        float4 radiance = 0.0;
+        for (uint b = 0; b < 4; b++)
+        {
+            const uint2 base_offset = BilinearOffset(b);
+            const uint2 bilinear_index = base_index + base_offset;
+            float4 cascade_interval = 0.0; // cast(interval) ?? should this be here or outside loop
+            float4 bilinear_interval = 0.0; // texelFetch();
+            radiance += MergeInterval(cascade_interval, bilinear_interval) * weights[b];
+        }
+        merged += radiance / 4.0;
+    }
+    return merged;
+}
+
 
 float3 GetRayOrigin(float2 coord, float3 normal)
 {
@@ -156,7 +223,7 @@ float3 GetRayOrigin(float2 coord, float3 normal)
 RayDesc GetRay(uint2 probeCenterCoord, float2 angleId, float3 probeNormal, uint cascade_index)
 {
     RayDesc ray_desc;
-    float2 interval = GetInterval(cascade_index);
+    float2 interval = GetInterval(cascade_index, 1.0);
     ray_desc.TMin = interval.x;
     ray_desc.TMax = interval.y;
     ray_desc.Direction = GetRay_DirectionFirst(angleId, cascade_index);
@@ -164,11 +231,16 @@ RayDesc GetRay(uint2 probeCenterCoord, float2 angleId, float3 probeNormal, uint 
     return ray_desc;
 }
 
-float4 GetRadiance(IntersectData idata)
+float4 GetRadiance(IntersectData idata, RayDesc ray)
 {
-    return float4(idata.position, 1.0);
-
+    //return float4(idata.normal, 1.0);
+    Material material = idata.material;
+    MaterialBRDF materialBRDF = MakeMaterialBRDF(material, idata.uv);
+    float3 reflectance = evaluateBRDF(materialBRDF, idata.normal, ray.Direction, normalize(float3(1, 1, 1)));
+    return float4(reflectance, 1);
 }
+
+
 
 
 Texture2D g_lastCascade;
@@ -189,6 +261,7 @@ void PingPongCascades(uint3 did : SV_DispatchThreadID)
     float probe_size = pow(sqrt_base, cascade_index); // probe size in pixels
     float2 num_probes = floor(resolution / probe_size); // number of probes in x/y directions
     uint2 probe_rel_pos = coord % num_probes; // [0, num_probes] position of the pixel in the probe we're doing this invocation
+    
     uint2 ray_pos = coord / num_probes; // [0, probe_size] ray id of this pass - which direction will we be tracing?
     uint base_idx = base * (ray_pos.x + probe_size * ray_pos.y);
     float2 probe_center = (probe_rel_pos + 0.5) * probe_size; // [0, resolution]
@@ -230,13 +303,14 @@ void PingPongCascades(uint3 did : SV_DispatchThreadID)
         HitInfo hit = GetHitInfoRtInlineCommitted(query);
         IntersectData idata = MakeIntersectData(hit);
         // TODO: get radiance from hit surface
-        radiance.rgb = GetRadiance(idata).rgb;
+        radiance.rgb = GetRadiance(idata, ray).rgb;
         radiance.a = 0.0; // occluded
     }
     else // hit nothing
     {
         // TODO: sample env. map
-        radiance = float4(2, 2, 2, 1);
+        radiance = g_EnvironmentBuffer.SampleLevel(g_TextureSampler, ray.Direction, 0.0);
+        //radiance = float4(2, 2, 2, 1);
     }
     
     if (g_cascadeId < 5) // merge upper cascades if they exist
@@ -318,7 +392,7 @@ void RenderCascades(uint3 did : SV_DispatchThreadID)
         HitInfo hit = GetHitInfoRtInlineCommitted(query);
         IntersectData idata = MakeIntersectData(hit);
         // TODO: get radiance from hit surface
-        radiance.rgb = GetRadiance(idata).rgb;
+        radiance.rgb = GetRadiance(idata, ray).rgb;
         radiance.a = 0.0; // occluded
         if(g_cascadeId < 4) // not final one
         {
