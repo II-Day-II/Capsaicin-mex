@@ -35,43 +35,7 @@ SamplerState g_TextureSampler; // Is a linear sampler
 
 // rc uniforms
 uint g_cascadeId;
-uint2 g_probesCount; 
 uint2 g_BufferDimensions;
-RWTexture2D<float4> o_CascadeTex;
-
-// Cascade Layout
-// Rows - depth angled rays
-// Columns - projection angled rays
-// ._______________________________.
-// |   ↗   |   ↖   |   ↙   |   ↘   |
-// |_______|_______|_______|_______|
-// |   ↗   |   ↖   |   ↙   |   ↘   |
-// |_______|_______|_______|_______|
-// |   ↗   |   ↖   |   ↙   |   ↘   |
-// |_______|_______|_______|_______|
-// |   ↗   |   ↖   |   ↙   |   ↘   |
-// |_______|_______|_______|_______|
-// |_↗_|_↑_|_↖_|_←_|_↙_|_↓_|_↘_|_↗_|
-// |_↗_|_↑_|_↖_|_←_|_↙_|_↓_|_↘_|_↗_|
-// |_↗_|_↑_|_↖_|_←_|_↙_|_↓_|_↘_|_↗_|
-// |_↗_|_↑_|_↖_|_←_|_↙_|_↓_|_↘_|_↗_|
-
-// TODO: decipher this
-float3 GetRay_DirectionFirst(float2 angleId, float cascadeLevel)
-{
-    float deltaAngle = TWO_PI * pow(0.5f, cascadeLevel) * 0.125f; // 1/8
-    // Azimuth
-    float phi = (angleId.x + 0.5f) * deltaAngle;
-    // Polar
-    float theta = lerp(0.4f, 0.6f, angleId.y * 0.33334f) * PI;
-
-    float2 sinCosPhi;
-    float2 sinCosTheta;
-    sincos(phi, sinCosPhi.x, sinCosPhi.y);
-    sincos(theta, sinCosTheta.x, sinCosTheta.y);
-
-    return float3(sinCosTheta.x * sinCosPhi.y, sinCosTheta.y, sinCosTheta.x * sinCosPhi.x);
-}
 
 float GetProbeDepth(uint2 coord, uint cascade_level)
 {
@@ -83,46 +47,6 @@ float GetProbeDepth(uint2 coord, uint cascade_level)
 float3 GetProbeNormal(uint2 coord)
 {
     return g_GeometryNormalBuffer.Load(int3(coord, 0)).xyz;
-}
-
-float4 LoadUpperCascadeBilinear(uint2 coords, float2 weights)
-{
-    float4 a = o_CascadeTex[coords];
-    float4 b = o_CascadeTex[coords + int2(1, 0)];
-    float4 c = o_CascadeTex[coords + int2(0, 1)];
-    float4 d = o_CascadeTex[coords + int2(1, 1)];
-
-    float4 e = lerp(a, b, weights.x);
-    float4 f = lerp(c, d, weights.x);
-
-    return lerp(e, f, weights.y);
-}
-
-float4 LoadUpperRadiance(uint2 coords)
-{
-    const uint2 lowerCascadeSize = g_probesCount;
-    const uint2 upperCascadeSize = g_probesCount * 0.5;
-    uint2 upperCascadeCoords = floor(coords * 0.5);
-    
-    // TODO: decipher this shit
-    uint2 lowerProbeId = coords % lowerCascadeSize;
-    uint2 upperProbeBottomLeftId = clamp(floor((lowerProbeId - 1) * 0.5f), 0, upperCascadeSize - 2);
-    float2 bilinearWeight = saturate(fmod((lowerProbeId - 1) * 0.5f, 1.0f) + 0.25f);
-    
-    upperCascadeCoords = upperCascadeCoords / upperCascadeSize * upperCascadeSize;
-    upperCascadeCoords.x *= 2;
-    upperCascadeCoords += upperProbeBottomLeftId;
-    upperCascadeCoords.y += upperCascadeSize.y * 4;
-
-    int2 offset = int2(upperCascadeSize.x, 0);
-
-    float4 upperRadiance = 0.0f;
-
-    // NOTE: Sample 2 main rays
-    upperRadiance += LoadUpperCascadeBilinear(upperCascadeCoords, bilinearWeight);
-    upperRadiance += LoadUpperCascadeBilinear(upperCascadeCoords + offset, bilinearWeight);
-    
-    return upperRadiance * 0.5; // ???
 }
 
 float IntervalScale(uint cascade_index)
@@ -174,29 +98,6 @@ uint2 BilinearOffset(uint i)
     return offsets[i];
 }
 
-float4 MergeBilinear(float2 dest_center, float2 bilinear_size)
-{
-    float4 weights; 
-    uint2 base_index;
-    BilinearSamples(dest_center, bilinear_size, weights, base_index);
-    
-    float4 merged = float4(0, 0, 0, 1);
-    for (uint d = 0; d < 4; d++)
-    {
-        float4 radiance = 0.0;
-        for (uint b = 0; b < 4; b++)
-        {
-            const uint2 base_offset = BilinearOffset(b);
-            const uint2 bilinear_index = base_index + base_offset;
-            float4 cascade_interval = 0.0; // cast(interval) ?? should this be here or outside loop
-            float4 bilinear_interval = 0.0; // texelFetch();
-            radiance += MergeInterval(cascade_interval, bilinear_interval) * weights[b];
-        }
-        merged += radiance / 4.0;
-    }
-    return merged;
-}
-
 
 float3 GetRayOrigin(float2 coord, float3 normal)
 {
@@ -220,17 +121,6 @@ float3 GetRayOrigin(float2 coord, float3 normal)
     return origin;
 }
 
-RayDesc GetRay(uint2 probeCenterCoord, float2 angleId, float3 probeNormal, uint cascade_index)
-{
-    RayDesc ray_desc;
-    float2 interval = GetInterval(cascade_index, 1.0);
-    ray_desc.TMin = interval.x;
-    ray_desc.TMax = interval.y;
-    ray_desc.Direction = GetRay_DirectionFirst(angleId, cascade_index);
-    ray_desc.Origin = GetRayOrigin(probeCenterCoord, probeNormal);
-    return ray_desc;
-}
-
 float4 GetRadiance(IntersectData idata, RayDesc ray)
 {
     //return float4(idata.normal, 1.0);
@@ -241,252 +131,103 @@ float4 GetRadiance(IntersectData idata, RayDesc ray)
 }
 
 
-
+#define DEBUG_DIRECTIONS 0
+#define DEBUG_DISABLE_MERGING 0
 
 Texture2D g_lastCascade;
 RWTexture2D<float4> o_currentCascade;
 uint2 g_CascadeTexDimensions;
 
+
 [numthreads(8,8,1)]
-void PingPongCascades(uint3 did : SV_DispatchThreadID)
+void TraceCascades(uint3 did : SV_DispatchThreadID)
 {
-    const uint2 coord = did.xy;
-    const float base = 4.0; // TODO: redo this, maybe use probe count/size instead?
-    const float sqrt_base = sqrt(base);
+    // constants for this cascade
     const float cascade_index = g_cascadeId;
+    const bool is_cascade_0 = cascade_index == 0;
     const float2 resolution = g_BufferDimensions; // g_CascadeTexDimensions;
     const float2 one_over_res = 1.0 / resolution;
+    const float2 probe_size = pow(2, cascade_index + 1);             // size of the probe in pixels, c0 has 2x2 pixels / probe // TODO: variable scaling factor for probe size per cascade
+    const float2 num_probes = resolution / probe_size;               // [res/2, res/4, res/8, ...] number of probes in x/y direction (unused?)
+    const float2 interval = GetInterval(cascade_index, 1.0);         // the start and end distances of this cascade's interval // TODO: variable base length
     
-    const bool is_cascade_0 = g_cascadeId == 0;
-    float probe_size = pow(sqrt_base, cascade_index); // probe size in pixels
-    float2 num_probes = floor(resolution / probe_size); // number of probes in x/y directions
-    uint2 probe_rel_pos = coord % num_probes; // [0, num_probes] position of the pixel in the probe we're doing this invocation
-    
-    uint2 ray_pos = coord / num_probes; // [0, probe_size] ray id of this pass - which direction will we be tracing?
-    uint base_idx = base * (ray_pos.x + probe_size * ray_pos.y);
-    float2 probe_center = (probe_rel_pos + 0.5) * probe_size; // [0, resolution]
-    float2 probe_center_uv = probe_center * one_over_res; // [0, 1]
-    
-    //o_currentCascade[did.xy] = float4(probe_center_uv, 0, 1);
-    //return;
-    
-    float3 direction = mapToHemiOctahedronInverse(ray_pos / probe_size); // +hemisphere ray direction. Now to rotate the direction according to normal...
-    float3 normal = 2.0 * g_GeometryNormalBuffer.SampleLevel(g_TextureSampler, probe_center_uv, 0).xyz - 1.0;
-    
-    //o_currentCascade[did.xy] = float4(normal, 1);
-    //return;
-    
-    bool is_sky_pixel = dot(normal, normal) == 0.0;
-    if (is_sky_pixel)
+    // constants for this invocation (dependent on dispatch id)
+    const uint2 coord = did.xy;
+    // constants for this probe
+    const float2 probe_position = floor(coord / probe_size);         // [0, num_probes] position of this probe in the grid of probes
+    const float2 probe_center = (probe_position + 0.5) * probe_size; // [probe_size/2, res - probe_size/2] the texel coordinate of the center of this probe
+    const float2 probe_center_uv = probe_center * one_over_res;      // [0, 1] uv coordinate of this probe's center
+    // constants for this pixel
+    const float2 pos_in_probe = coord % probe_size;                  // [0, probe_size] position of this pixel in the probe
+
+    // get probe normal and see if it's on a surface
+    float3 probe_normal = g_GeometryNormalBuffer.SampleLevel(g_TextureSampler, probe_center_uv, 0);
+    const bool is_sky_pixel = dot(probe_normal, probe_normal) == 0.0;
+    if(is_sky_pixel)
     {
-        o_currentCascade[did.xy] = float4(0, 0, 0, 1);
-        return; // sky pixel
+        o_currentCascade[coord] = float4(0, 0, 0, 1);
+        return; // sky pixel does not reflect
     }
-    RayDesc ray = GetRay(probe_center, ray_pos / probe_size, normal, cascade_index);
+    probe_normal = 2.0 * probe_normal - 1.0;
+    // get ray origin for this probe // TODO: different probes on min/max of depth buffer in this probe_position
+    const float3 origin = GetRayOrigin(probe_center, probe_normal);
     
-    //o_currentCascade[did.xy] = float4(direction, 1);
-    //return;
-    
+    // get a ray direction for this pixel in the probe
+    const float2 uv_in_probe = (pos_in_probe / probe_size) + 0.5;
+    float3 direction = mapToHemiOctahedronInverse(uv_in_probe);
+    // TODO: rotate direction to align with probe normal
     float3 b1, b2;
-    GetOrthoVectors(normal, b1, b2);
-    //direction = direction.x * b1 + direction.y * b2 + direction.z * normal;
+    GetOrthoVectors(probe_normal, b1, b2);
+    direction = direction.x * b1 + direction.y * b2 + direction.z * probe_normal;
     
-     // TODO: figure out rays 
-    ClosestRayQuery query = TraceRay<ClosestRayQuery>(ray);
+    // TODO: Do I need to do preaveraging (4 rays per pixel)?
     
+    // raytrace
     float4 radiance = float4(0.0, 0.0, 0.0, 1.0);
     
-    //radiance = float4(ray_pos / probe_size, 0, 1);
+    #if DEBUG_DIRECTIONS
+    radiance = float4(direction, 1.0);
+    #else
+    RayDesc ray;
+    ray.Direction = direction;
+    ray.Origin = origin;
+    ray.TMin = interval.x;
+    ray.TMax = interval.y;
+    
+    ClosestRayQuery query = TraceRay<ClosestRayQuery>(ray);
     if (query.CommittedStatus() == COMMITTED_TRIANGLE_HIT) // ray hit something
     {
         float t = query.CommittedRayT();
         HitInfo hit = GetHitInfoRtInlineCommitted(query);
         IntersectData idata = MakeIntersectData(hit);
-        // TODO: get radiance from hit surface
         radiance.rgb = GetRadiance(idata, ray).rgb;
         radiance.a = 0.0; // occluded
     }
-    else // hit nothing
+    else // hit nothing, sample environment map
     {
-        // TODO: sample env. map
         radiance = g_EnvironmentBuffer.SampleLevel(g_TextureSampler, ray.Direction, 0.0);
-        //radiance = float4(2, 2, 2, 1);
     }
+    #endif
     
-    if (g_cascadeId < 5) // merge upper cascades if they exist
-    {
-        float4 radiance_delta = float4(0, 0, 0, radiance.a);
-        for (float i = 0; i < 4; i++)
-        {
-            float idx = base_idx + i;
-            float upper_spacing = pow(sqrt_base, cascade_index + 1);
-            float2 upper_probe_count = floor(resolution / upper_spacing);
-            float2 upper_pos = float2(fmod(idx, upper_spacing), floor(idx / upper_spacing)) * upper_probe_count;
-        
-            float2 offset = (probe_rel_pos + 0.5) / sqrt_base;
-            float2 clamped = clamp(offset, 0.5.xx, upper_probe_count - 0.5);
-            float2 clampedUv = (upper_pos + clamped) / resolution;
-            //float4 upperRadiance = g_lastCascade.Load(int3(upper_pos + clamped, 0)); // TODO: Depth aware upscaling...
-            float4 upperRadiance = g_lastCascade.SampleLevel(g_TextureSampler, clampedUv, 0);
-            radiance_delta.rgb += upperRadiance.rgb * radiance_delta.a; // TODO: should this be _delta or not
-            radiance_delta.a *= upperRadiance.a;
-        }
-        radiance.rgb += radiance_delta.rgb * radiance_delta.a; // average them out
-        radiance.a *= radiance_delta.a; // this does not make sense
-        radiance.rgb *= 0.25;
-    }
-    o_currentCascade[did.xy] = radiance;
-    return;
-    
-}
-
-
-[numthreads(8,4,1)]
-void RenderCascades(uint3 did : SV_DispatchThreadID)
-{
-    // TODO: rearrange how we store this
-    int2 coords = int2(did.xy);
-    //if (true)
-    //{ float2 uv = float2(coords) / float2(g_BufferDimensions); o_CascadeTex[coords] = float4(uv, 0.025, 1.0); return; }
-    
-    // TODO: place probes on min/max depth of each probe size area of buffer; figure out how to store and merge that
-    
-    
-    int2 targetCoords = coords + int2(0, 4 * g_probesCount.y);
-    if (coords.x >= g_BufferDimensions.x || coords.y >= 4 * g_probesCount.y)
-    {
-        return; // Out of bounds
-    }
-    int2 probeCenterCoord = coords % g_probesCount;
-    float2 probeCenterUV = float2(probeCenterCoord + 1) / float2(g_probesCount + 1);
-    int2 probeCenterTexelSpace = probeCenterUV * g_BufferDimensions;
-    
-    const float cascadeLevel = float(g_cascadeId);
-    
-    const float cascadeFactor = pow(2.0, cascadeLevel);
-    const float projRays = 8.0 * cascadeFactor;
-    const float depthRays = floor(4.0 * 2.0 * cascadeFactor);
-    float2 angleId = float2(floor(coords.x * projRays / float(g_BufferDimensions.x)), fmod(floor(1.0 - (coords.y + 1.0) / float(g_BufferDimensions.y)) * depthRays, 4.0));
-    
-    float probeDepth = GetProbeDepth(probeCenterTexelSpace, cascadeLevel);
-    float3 probeNormal = GetProbeNormal(probeCenterTexelSpace);
-    bool is_sky_pixel = dot(probeNormal, probeNormal) == 0.0f;
-    
-    //if (false)
-    if (is_sky_pixel)
-    {
-        o_CascadeTex[targetCoords] = float4(0.0, 0.0, 0.0, 1.0);
-        return;
-    }
-    
-    // trace some rays
-    RayDesc ray = GetRay(probeCenterTexelSpace, probeDepth, probeNormal, g_cascadeId);
-    // TODO: figure out rays 
-    ClosestRayQuery query = TraceRay<ClosestRayQuery>(ray);
-    
-    float4 radiance = float4(0.0, 0.0, 0.0, 1.0);
-    
-    if (query.CommittedStatus() == COMMITTED_TRIANGLE_HIT) // ray hit something
-    {
-        float t = query.CommittedRayT();
-        HitInfo hit = GetHitInfoRtInlineCommitted(query);
-        IntersectData idata = MakeIntersectData(hit);
-        // TODO: get radiance from hit surface
-        radiance.rgb = GetRadiance(idata, ray).rgb;
-        radiance.a = 0.0; // occluded
-        if(g_cascadeId < 4) // not final one
-        {
-            o_CascadeTex[targetCoords] = radiance;
-            return;
-        }
-        float4 upperRadiance = LoadUpperRadiance(coords);
-        radiance.rgb += upperRadiance.rgb * radiance.a;
-        radiance.a *= upperRadiance.a;
-        o_CascadeTex[targetCoords] = radiance;
-        //o_CascadeTex[targetCoords] = float4(t, idata.uv, 1.0);
-        return;
-    }
-    else // hit nothing
-    {
-        // TODO: sample env. map
-        o_CascadeTex[targetCoords] = float4(2, 2, 2, 1);
-    }
-    
-}
-
-RWTexture2D<float4> o_IntermediateCascade;
-
-[numthreads(8,8,1)]
-void MergeCascades(uint3 did : SV_DispatchThreadID)
-{
-    // TODO: wtf is all this
-    uint2 targetCoords = did.xy;
-    float4 texSizes = float4(g_BufferDimensions.xy, 1.0 / g_BufferDimensions.xy);
-    
-    float2 sideId = floor(2 * did.xy * texSizes.zw);
-    float side = sideId.x + sideId.y * 2;
-    uint2 coords = fmod(did.xy * 2, texSizes.xy) * 0.25;
-    coords.y += 7.0 * 0.125 * texSizes.y;
-    coords.x += side * texSizes.x * 0.25;
-    float2 weight = max(0.0, frac(did.xy * 0.25) - 0.25);
-    int2 offset = int2(0, -texSizes.y * 0.125);
-    float2 uv = frac(2.0 * texSizes.zw * did.xy);
-    //float3 normal = g_GeometryNormalBuffer.Sample(g_TextureSampler, uv).xyz; // ???
-    float3 normal = g_GeometryNormalBuffer.Load(int3(uv * texSizes.xy, 0)).xyz;
-    float4 radiance = 0.0;
-    uint2 c = coords;
+    #if !DEBUG_DISABLE_MERGING
+    // merge with upper cascade
+    float2 bilinear_size = pow(2, cascade_index + 2);
+    float4 weights;
+    uint2 top_left_bilin_probe_coord;
+    BilinearSamples(probe_center, bilinear_size, weights, top_left_bilin_probe_coord);
+    float4 bilinear_radiance = 0;
     for (uint i = 0; i < 4; i++)
     {
-        float2 angleId = float2(side * 2.0, i);
-        float3 dir = GetRay_DirectionFirst(angleId, 0);
-        radiance += LoadUpperCascadeBilinear(c, weight) * saturate(dot(dir, normal));
-        c.y += offset.y;
+        float2 offset = BilinearOffset(i);
+        float2 bilinear_idx = top_left_bilin_probe_coord + offset;
+        float2 bilinear_texel = bilinear_idx * bilinear_size;
+        float4 bilinear_interval = g_lastCascade.Load(int3(bilinear_texel, 0));
+        bilinear_radiance += bilinear_interval * weights[i];
     }
-    c = coords + uint2(texSizes.x * 0.125, 0);
-    for (uint ii = 0; ii < 4; ii++)
-    {
-        float2 angleId = float2(side * 2 + 1, ii);
-        float3 dir = GetRay_DirectionFirst(angleId, 0);
-        radiance += LoadUpperCascadeBilinear(c, weight) * saturate(dot(dir, normal));
-        c.y += offset.y;
-    }
-    o_IntermediateCascade[targetCoords] = radiance * 0.5;
+    
+    radiance = MergeInterval(radiance, bilinear_radiance);
+    #endif
+    
+    // return
+    o_currentCascade[coord] = radiance;
 }
-
-//RWTexture2D<float4> o_IntermediateCascade2;
-RWTexture2D<float4> o_FinalCascade;
-
-[numthreads(8,8,1)]
-void AintNoWayINeedAnotherPass(uint3 did : SV_DispatchThreadID)
-{
-    // fucking do it again lmao???
-    float3 normal_ = g_GeometryNormalBuffer.Load(int3(did.xy, 0)).xyz;
-    float4 color = 0.0;
-    for (uint x = 0; x < 8; x++)
-    {
-        for (uint y = 0; y < 4; y++)
-        {
-            float3 dir = GetRay_DirectionFirst(float2(x, y), 0);
-            float NdotL = saturate(dot(normal_, dir));
-            float4 radiance = o_IntermediateCascade[did.xy + uint2(x, -y) * g_BufferDimensions.xy * 0.125];
-            color += radiance * NdotL;
-        }
-    }
-    o_FinalCascade[did.xy] = color;
-    return;
-}
-
-
-[numthreads(8,8,1)]
-void FinalPassForReal(uint3 did: SV_DispatchThreadID)
-{
-    float4 texSizes = float4(g_BufferDimensions.xy, 1.0 / g_BufferDimensions.xy);
-    int3 cascadeSizeOffset = int3(round(0.5 * texSizes.zw), 0);
-    int2 coords = floor(did.xy * 0.5);
-    float4 r = o_IntermediateCascade[coords];
-    r += o_IntermediateCascade[coords + cascadeSizeOffset.xz];
-    r += o_IntermediateCascade[coords + cascadeSizeOffset.zy];
-    r += o_IntermediateCascade[coords + cascadeSizeOffset.xy];
-    o_FinalCascade[did.xy] = r;
-}
-

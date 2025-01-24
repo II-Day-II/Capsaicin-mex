@@ -194,7 +194,7 @@ bool RCTechnique::initKernel(CapsaicinInternal const& capsaicin) noexcept
     std::vector<char const *> defines;
 
     rc_kernel = gfxCreateComputeKernel(
-        gfx_, rc_program, "PingPongCascades", defines.data(), (uint32_t)defines.size()); // TODO: put entry point name here
+        gfx_, rc_program, "TraceCascades", defines.data(), (uint32_t)defines.size()); // TODO: put entry point name here
 
     //rc_intermediate_kernel = gfxCreateComputeKernel(gfx_, rc_program, "MergeCascades", defines.data(), (uint32_t)defines.size());
 
