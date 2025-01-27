@@ -51,16 +51,20 @@ void RCTechnique::render([[maybe_unused]] CapsaicinInternal &capsaicin) noexcept
         initKernel(capsaicin);
     }
 
-    gfxProgramSetParameter(gfx_, rc_program, "o_CascadeTex", capsaicin.getAOVBuffer("rc_probes0"));
-    gfxProgramSetParameter(
-        gfx_, rc_program, "o_IntermediateCascade", capsaicin.getAOVBuffer("rc_intermediate"));
-    gfxProgramSetParameter(gfx_, rc_program, "o_FinalCascade", capsaicin.getAOVBuffer("rc_final"));
+    
 
     uint2 buffer_dimensions = uint2(capsaicin.getWidth(), capsaicin.getHeight());
     gfxProgramSetParameter(gfx_, rc_program, "g_BufferDimensions", buffer_dimensions);
     uint2 cascade_dimensions = buffer_dimensions / 2u;
     gfxProgramSetParameter(gfx_, rc_program, "g_CascadeTexDimensions", cascade_dimensions);
 
+    // TODO: move these things to render settings so ui can change them
+    uint cascade_count = 5;
+    gfxProgramSetParameter(gfx_, rc_program, "g_numCascades", cascade_count);
+    float c0_length = 0.1f;
+    gfxProgramSetParameter(gfx_, rc_program, "g_c0_length", c0_length);
+    
+    
     gfxProgramSetParameter(gfx_, rc_program, "g_Scene", capsaicin.getAccelerationStructure());
 
     gfxProgramSetParameter(
@@ -85,16 +89,11 @@ void RCTechnique::render([[maybe_unused]] CapsaicinInternal &capsaicin) noexcept
 
     gfxCommandBindKernel(gfx_, rc_kernel);
 
-    for (int cascade_level = 5; cascade_level >= 0; cascade_level -= 1)
+    for (int cascade_level = cascade_count; cascade_level >= 0; cascade_level -= 1)
     {
         bool  ping_pong   = cascade_level % 2 == 0;
-        uint2 probe_count =
-            // uint2(cascade_dimensions.x / (8 * 1 << cascade_level),
-            //     cascade_dimensions.y / (8 * 1 << cascade_level));
-            uint2(buffer_dimensions.x / (8 * 1 << cascade_level),
-                buffer_dimensions.y / (8 * 1 << cascade_level));
         gfxProgramSetParameter(gfx_, rc_program, "g_cascadeId", cascade_level);
-        gfxProgramSetParameter(gfx_, rc_program, "g_probesCount", probe_count);
+        
         
         //gfxProgramSetParameter(gfx_, rc_program, "g_lastCascade", rc_pingpong_textures[ping_pong ? 0 : 1]);
         //gfxProgramSetParameter(gfx_, rc_program, "o_currentCascade", rc_pingpong_textures[ping_pong ? 1 : 0]);
@@ -112,14 +111,6 @@ void RCTechnique::render([[maybe_unused]] CapsaicinInternal &capsaicin) noexcept
 
         gfxCommandDispatch(gfx_, thread_size_x, thread_size_y, 1); 
     }
-
-    //gfxCommandBindKernel(gfx_, rc_intermediate_kernel);
-    //gfxCommandDispatch(gfx_, buffer_dimensions.x / 8, buffer_dimensions.y / 8, 1);
-    //gfxCommandCopyTexture(gfx_, capsaicin.getAOVBuffer("rc_intermediate"), capsaicin.getAOVBuffer("rc_probes"));
-    
-    //gfxCommandBindKernel(gfx_, rc_finalize_kernel);
-    //gfxCommandDispatch(gfx_, buffer_dimensions.x / 8, buffer_dimensions.y / 8, 1);
-
 
 
     if (capsaicin.getCurrentDebugView() == "RCProbes")
