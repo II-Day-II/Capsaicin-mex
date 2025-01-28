@@ -51,9 +51,21 @@ void RCTechnique::render([[maybe_unused]] CapsaicinInternal &capsaicin) noexcept
         initKernel(capsaicin);
     }
 
-    
-
     uint2 buffer_dimensions = uint2(capsaicin.getWidth(), capsaicin.getHeight());
+    
+    // get min/max depths
+    gfxProgramSetParameter(gfx_, minmax_depth_program, "g_Depth", capsaicin.getAOVBuffer("Depth"));
+    gfxCommandBindKernel(gfx_, minmax_depth_kernel);
+    for (uint i = 0; i < 5; i++)
+    {
+        gfxProgramSetParameter(
+            gfx_, minmax_depth_program, "o_MinMaxDepth", capsaicin.getAOVBuffer("rc_MinMaxDepth"), i);
+        gfxProgramSetParameter(gfx_, minmax_depth_program, "g_mip_level", i);
+        gfxCommandDispatch(gfx_, buffer_dimensions.x / 8, buffer_dimensions.y / 8, 1);
+    }
+
+
+
     gfxProgramSetParameter(gfx_, rc_program, "g_BufferDimensions", buffer_dimensions);
     uint2 cascade_dimensions = buffer_dimensions / 2u;
     gfxProgramSetParameter(gfx_, rc_program, "g_CascadeTexDimensions", cascade_dimensions);
@@ -160,10 +172,11 @@ AOVList RCTechnique::getAOVs() const noexcept
     aovs.push_back({"GeometryNormal", AOV::Read});
     aovs.push_back({"Visibility", AOV::Read});
     //aovs.push_back({"rc_probes", AOV::Write, AOV::Clear, DXGI_FORMAT_R8G8B8A8_UNORM});
-    aovs.push_back({"rc_probes0", AOV::ReadWrite, AOV::Clear, DXGI_FORMAT_R16G16B16A16_FLOAT});
-    aovs.push_back({"rc_probes1", AOV::ReadWrite, AOV::Clear, DXGI_FORMAT_R16G16B16A16_FLOAT});
+    aovs.push_back({"rc_probes0", AOV::ReadWrite, AOV::Clear, DXGI_FORMAT_R16G16B16A16_FLOAT, 1, 1920, 1080});
+    aovs.push_back({"rc_probes1", AOV::ReadWrite, AOV::Clear, DXGI_FORMAT_R16G16B16A16_FLOAT, 1, 1920, 1080});
     aovs.push_back({"rc_intermediate", AOV::ReadWrite, AOV::Clear, DXGI_FORMAT_R16G16B16A16_FLOAT});
     aovs.push_back({"rc_final", AOV::Write, AOV::Clear, DXGI_FORMAT_R16G16B16A16_FLOAT});
+    aovs.push_back({"rc_MinMaxDepth", AOV::ReadWrite, AOV::Clear, DXGI_FORMAT_R32G32_FLOAT, 5});
     return aovs;
 }
 
@@ -185,7 +198,12 @@ bool RCTechnique::initKernel(CapsaicinInternal const& capsaicin) noexcept
     std::vector<char const *> defines;
 
     rc_kernel = gfxCreateComputeKernel(
-        gfx_, rc_program, "TraceCascades", defines.data(), (uint32_t)defines.size()); // TODO: put entry point name here
+        gfx_, rc_program, "TraceCascades", defines.data(), (uint32_t)defines.size()); 
+
+    minmax_depth_program = gfxCreateProgram(
+        gfx_, "render_techniques/radiance_cascade/downsample_depth", capsaicin.getShaderPath());
+    minmax_depth_kernel =
+        gfxCreateComputeKernel(gfx_, minmax_depth_program, "MinMaxDepth", defines.data(), (uint32_t)defines.size());
 
     //rc_intermediate_kernel = gfxCreateComputeKernel(gfx_, rc_program, "MergeCascades", defines.data(), (uint32_t)defines.size());
 

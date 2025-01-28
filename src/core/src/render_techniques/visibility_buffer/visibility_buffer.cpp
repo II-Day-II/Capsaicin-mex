@@ -67,7 +67,7 @@ AOVList VisibilityBuffer::getAOVs() const noexcept
     aovs.push_back({"Debug", AOV::Write});
     aovs.push_back({"Visibility", AOV::Write, AOV::Clear, DXGI_FORMAT_R32G32B32A32_FLOAT});
     aovs.push_back({"Depth", AOV::ReadWrite});
-    aovs.push_back({"VisibilityDepth", AOV::Write, AOV::Clear, DXGI_FORMAT_R32_FLOAT, "PrevVisibilityDepth"});
+    aovs.push_back({.name = "VisibilityDepth", .access = AOV::Write, .flags = AOV::Clear, .format = DXGI_FORMAT_R32_FLOAT, .backup_name = "PrevVisibilityDepth"});
     aovs.push_back({"GeometryNormal", AOV::Write, AOV::Clear, DXGI_FORMAT_R8G8B8A8_UNORM});
     aovs.push_back({"Velocity", AOV::Write, AOV::Clear, DXGI_FORMAT_R16G16_FLOAT});
     aovs.push_back(

@@ -2203,6 +2203,9 @@ void CapsaicinInternal::setupRenderTechniques(std::string_view const &name) noex
             DXGI_FORMAT      format;
             AOV::Flags       flags;
             std::string_view backup = std::string_view();
+            uint             mips = 1;
+            uint             width = 1920;
+            uint             height = 1080;
         };
 
         // We use 3 main default AOVs that are always available
@@ -2221,7 +2224,7 @@ void CapsaicinInternal::setupRenderTechniques(std::string_view const &name) noex
         {
             for (auto &j : i->getAOVs())
             {
-                if (auto const found = requestedAOVs.find(j.name); found == requestedAOVs.end())
+                if (auto const found = requestedAOVs.find(j.name); found == requestedAOVs.end()) // not found
                 {
                     // Check if backup AOV
                     if (auto pos = backupAOVs.find(j.backup_name); pos != backupAOVs.cend())
@@ -2254,7 +2257,7 @@ void CapsaicinInternal::setupRenderTechniques(std::string_view const &name) noex
                     }
                     // Check if AOV is one of the optional default ones and add it using default values if not
                     // supplied
-                    AOVParams newParams = AOVParams {j.format, j.flags, j.backup_name};
+                    AOVParams newParams = AOVParams {j.format, j.flags, j.backup_name, j.mips, j.width, j.height};
                     if (auto const k = defaultOptionalAOVs.find(j.name); k != defaultOptionalAOVs.end())
                     {
                         if (newParams.format == DXGI_FORMAT_UNKNOWN)
@@ -2295,7 +2298,7 @@ void CapsaicinInternal::setupRenderTechniques(std::string_view const &name) noex
                         }
                     }
                 }
-                else
+                else // found
                 {
                     // Update existing format if it doesn't have one
                     if (found->second.format == DXGI_FORMAT_UNKNOWN)
@@ -2389,7 +2392,9 @@ void CapsaicinInternal::setupRenderTechniques(std::string_view const &name) noex
         for (auto &i : requestedAOVs)
         {
             // Create new texture
-            GfxTexture  texture    = gfxCreateTexture2D(gfx_, i.second.format);
+            GfxTexture texture =
+                gfxCreateTexture2D(gfx_, i.second.width, i.second.height, i.second.format, i.second.mips);
+            //GfxTexture  texture    = gfxCreateTexture2D(gfx_, i.second.format);
             std::string bufferName = "Capsaicin_";
             bufferName += i.first;
             bufferName += "AOV";

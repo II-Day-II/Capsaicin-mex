@@ -82,13 +82,13 @@ float4 BilinearWeights(float2 ratio)
 }
 
 /*
-@param dest_center the center position of the destination probe in pixels
-@param bilinear_size the size of the bilinear probe in pixels
+@param dest_center the center position of the destination probe in pixels [probe_size/2, res-probe_size/2]
+@param upper_probe_size the size of the bilinear probe in pixels [probe_size*2]
 */
-void BilinearSamples(float2 dest_center, float2 bilinear_size, out float4 weights, out uint2 base_idx)
+void BilinearSamples(float2 dest_center, float2 upper_probe_size, out float4 weights, out uint2 base_idx)
 {
     // coord of top left bilinear probe when floored
-    const float2 base_coord = (dest_center / bilinear_size) - float2(0.5, 0.5);
+    const float2 base_coord = (dest_center / upper_probe_size) - float2(0.5, 0.5);
     const float2 ratio = frac(base_coord); // sub-bilinear probe pos
     weights = BilinearWeights(ratio);
     base_idx = uint2(floor(base_coord)); // top left bilinear probe coordinate
@@ -149,18 +149,18 @@ void TraceCascades(uint3 did : SV_DispatchThreadID)
     const bool is_cascade_0 = cascade_index == 0;
     const float2 resolution = g_BufferDimensions; // g_CascadeTexDimensions;
     const float2 one_over_res = 1.0 / resolution;
-    const float2 probe_size = pow(2, cascade_index + 1);             // size of the probe in pixels, c0 has 2x2 pixels / probe // TODO: variable scaling factor for probe size per cascade
-    const float2 num_probes = resolution / probe_size;               // [res/2, res/4, res/8, ...] number of probes in x/y direction (unused?)
-    const float2 interval = GetInterval(cascade_index, 0.05);         // the start and end distances of this cascade's interval // TODO: variable base length
+    const float2 probe_size = pow(2, cascade_index + 1);                     // size of the probe in pixels, c0 has 2x2 pixels / probe                   // TODO: variable scaling factor for probe size per cascade
+    const float2 num_probes = resolution / probe_size;                       // [res/2, res/4, res/8, ...] number of probes in x/y direction (unused?)
+    const float2 interval = GetInterval(cascade_index, g_c0_length);         // the start and end distances of this cascade's interval                   // TODO: variable base length
     
     // constants for this invocation (dependent on dispatch id)
     const uint2 coord = did.xy;
     // constants for this probe
-    const float2 probe_position = floor(coord / probe_size);         // [0, num_probes] position of this probe in the grid of probes
-    const float2 probe_center = (probe_position + 0.5) * probe_size; // [probe_size/2, res - probe_size/2] the texel coordinate of the center of this probe
-    const float2 probe_center_uv = probe_center * one_over_res;      // [0, 1] uv coordinate of this probe's center
+    const float2 probe_position = floor(coord / probe_size);                 // [0, num_probes] position of this probe in the grid of probes
+    const float2 probe_center = probe_position * probe_size + 0.5;         // [probe_size/2, res - probe_size/2] the texel coordinate of the center of this probe
+    const float2 probe_center_uv = probe_center * one_over_res;              // [0, 1] uv coordinate of this probe's center 
     // constants for this pixel
-    const float2 pos_in_probe = coord % probe_size;                  // [0, probe_size] position of this pixel in the probe
+    const float2 pos_in_probe = coord % probe_size;                          // [0, probe_size] position of this pixel in the probe
 
     // get probe normal and see if it's on a surface
     float3 probe_normal = g_GeometryNormalBuffer.SampleLevel(g_TextureSampler, probe_center_uv, 0).xyz;
@@ -174,70 +174,77 @@ void TraceCascades(uint3 did : SV_DispatchThreadID)
     probe_normal = 2.0 * probe_normal - 1.0;
     const float3 origin = GetRayOrigin(probe_center, probe_normal);
     
-    // get a ray direction for this pixel in the probe
-    const float2 uv_in_probe = (pos_in_probe + 0.5) / probe_size;
-    float3 direction = mapToHemiOctahedronInverse(uv_in_probe);
-    
-    // TODO: apparently I'm not supposed to do normal-aligned directions, instead do a full sphere. //
-    // Does this mean I need more probe resolution? min 4x4 for octahedral map? 
-    // How does this affect merging?
-    
-    // align direction hemisphere with normal 
-    float3 b1, b2;
-    GetOrthoVectors(probe_normal, b1, b2);
-    direction = normalize(direction.x * b1 + direction.y * b2 + direction.z * probe_normal);
-    
+    float4 t_radiance = float4(0, 0, 0, 1);
     // TODO: Do I need to do preaveraging (4 rays per pixel)?
+    {
+        // get a ray direction for this pixel in the probe
+        const float2 uv_in_probe = (pos_in_probe + 0.5) / probe_size;
+        float3 direction = mapToHemiOctahedronInverse(uv_in_probe);
     
-    // raytrace
-    float4 radiance = float4(0.0, 0.0, 0.0, 1.0);
+        // TODO: apparently I'm not supposed to do normal-aligned directions, instead do a full sphere. //
+        // Does this mean I need more probe resolution? min 4x4 for octahedral map? 
+        // How does this affect merging?
+    
+        // align direction hemisphere with normal 
+        float3 b1, b2;
+        GetOrthoVectors(probe_normal, b1, b2);
+        direction = normalize(direction.x * b1 + direction.y * b2 + direction.z * probe_normal);
+    
+    
+        // raytrace
+        float4 radiance = float4(0.0, 0.0, 0.0, 1.0);
     
 #if DEBUG_DIRECTIONS
-    radiance = float4(direction, 1.0);
+        radiance = float4(direction, 1.0);
 #else
-    RayDesc ray;
-    ray.Direction = direction;
-    ray.Origin = origin;
-    ray.TMin = interval.x;
-    ray.TMax = interval.y;
+        RayDesc ray;
+        ray.Direction = direction;
+        ray.Origin = origin;
+        ray.TMin = interval.x;
+        ray.TMax = interval.y;
     
-    ClosestRayQuery query = TraceRay<ClosestRayQuery>(ray);
-    if (query.CommittedStatus() == COMMITTED_TRIANGLE_HIT) // ray hit something
-    {
-        float t = query.CommittedRayT();
-        HitInfo hit = GetHitInfoRtInlineCommitted(query);
-        IntersectData idata = MakeIntersectData(hit); // TODO: sample lights the correct way
-        radiance.rgb = GetRadiance(idata, ray).rgb;
-        radiance.a = 0.0; // occluded
-    }
-    else if (g_cascadeId >= g_numCascades) // hit nothing, sample env. map if top cascade 
-    {
-        radiance.rgb = g_EnvironmentBuffer.SampleLevel(g_TextureSampler, ray.Direction, 0.0).rgb;
-    }
+        ClosestRayQuery query = TraceRay<ClosestRayQuery>(ray);
+        if (query.CommittedStatus() == COMMITTED_TRIANGLE_HIT) // ray hit something
+        {
+            float t = query.CommittedRayT();
+            HitInfo hit = GetHitInfoRtInlineCommitted(query);
+            IntersectData idata = MakeIntersectData(hit); // TODO: sample lights the correct way
+            //radiance.rgb = GetRadiance(idata, ray).rgb;
+            radiance.rgb = ray.Direction;
+            radiance.a = 0.0; // occluded
+        }
+        else if (g_cascadeId >= g_numCascades) // hit nothing, sample env. map if top cascade 
+        {
+            //radiance.rgb = g_EnvironmentBuffer.SampleLevel(g_TextureSampler, ray.Direction, 0.0).rgb * 1.0;
+            radiance.rgb = float3(1, 1, 1) * 0.03;
+        }
 #endif
     
 #if !DEBUG_DISABLE_MERGING
-    // TODO: depth aware upsampling of upper cascade, requires per-probe depth (mips?)
-    // TODO: figure out the cascade offsets
+        // TODO: depth aware upsampling of upper cascade, requires per-probe depth (mips?)
+        // TODO: figure out the cascade offsets
     
-    // merge with upper cascade
-    float2 upper_probe_size = pow(2, cascade_index + 2);
-    float4 weights;
-    uint2 top_left_bilin_probe_coord;
-    BilinearSamples(probe_center, upper_probe_size, weights, top_left_bilin_probe_coord);
-    float4 bilinear_radiance = 0;
-    for (uint i = 0; i < 4; i++)
-    {
-        float2 offset = BilinearOffset(i);
-        float2 bilinear_idx = top_left_bilin_probe_coord + offset;
-        float2 bilinear_texel = bilinear_idx * upper_probe_size;
-        float4 bilinear_interval = g_lastCascade.Load(int3(bilinear_texel, 0));
-        bilinear_radiance += bilinear_interval * weights[i];
-    }
-    
-    radiance = MergeInterval(radiance, bilinear_radiance);
+        // merge with upper cascade
+        float2 upper_probe_size = pow(2, cascade_index + 2);
+        float4 weights;
+        uint2 top_left_bilin_probe_coord;
+        BilinearSamples(probe_center, upper_probe_size, weights, top_left_bilin_probe_coord);
+        float4 bilinear_radiance = 0;
+        for (uint i = 0; i < 4; i++)
+        {
+            float2 offset = BilinearOffset(i);
+            float2 bilinear_idx = top_left_bilin_probe_coord + offset;
+            float2 bilinear_texel = bilinear_idx * upper_probe_size;
+            float4 bilinear_interval = g_lastCascade.Load(int3(bilinear_texel, 0));
+            bilinear_radiance += bilinear_interval * weights[i];
+        }
+        
+        radiance = MergeInterval(radiance, bilinear_radiance);
 #endif
+        t_radiance += radiance;
+    }
+
     
     // return
-    o_currentCascade[coord] = radiance;
+    o_currentCascade[coord] = t_radiance;
 }

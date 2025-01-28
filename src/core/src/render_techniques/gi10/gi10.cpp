@@ -1193,7 +1193,7 @@ AOVList GI10::getAOVs() const noexcept
     AOVList aovs;
     aovs.push_back({"Debug", AOV::Write});
     aovs.push_back({"GlobalIllumination", AOV::Write, AOV::None, DXGI_FORMAT_R16G16B16A16_FLOAT});
-    aovs.push_back({"Reflection", AOV::Write, AOV::None, DXGI_FORMAT_R16G16B16A16_FLOAT, "PrevReflection"});
+    aovs.push_back({.name = "Reflection", .access = AOV::Write, .flags = AOV::None, .format = DXGI_FORMAT_R16G16B16A16_FLOAT, .backup_name = "PrevReflection"});
     aovs.push_back({.name = "VisibilityDepth", .backup_name = "PrevVisibilityDepth"});
     aovs.push_back({.name = "GeometryNormal", .backup_name = "PrevGeometryNormal"});
     aovs.push_back({.name = "ShadingNormal", .backup_name = "PrevShadingNormal"});

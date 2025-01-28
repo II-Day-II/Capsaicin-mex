@@ -83,6 +83,9 @@ protected:
     //GfxKernel     rc_finalize_kernel; 
     GfxProgram    rc_program;
 
+    GfxProgram minmax_depth_program;
+    GfxKernel  minmax_depth_kernel;
+
     GfxTexture rc_pingpong_textures[2];
 
     GfxKernel     debug_rc_kernel;
