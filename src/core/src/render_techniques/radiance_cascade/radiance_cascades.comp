@@ -82,7 +82,7 @@ float4 BilinearWeights(float2 ratio)
 }
 
 /*
-@param dest_center the center position of the destination probe in pixels [probe_size/2, res-probe_size/2]
+@param dest_center the center position of the destination probe in pixels [probe_size/2, res - probe_size/2]
 @param upper_probe_size the size of the bilinear probe in pixels [probe_size*2]
 */
 void BilinearSamples(float2 dest_center, float2 upper_probe_size, out float4 weights, out uint2 base_idx)
@@ -127,8 +127,17 @@ float4 GetRadiance(IntersectData idata, RayDesc ray)
 {
     //return float4(idata.normal, 1.0);
     Material material = idata.material;
-    MaterialBRDF materialBRDF = MakeMaterialBRDF(material, idata.uv);
-    float3 reflectance = evaluateBRDF(materialBRDF, idata.normal, ray.Direction, normalize(float3(1, 1, 1)));
+    MaterialBSDF materialBSDF = MakeMaterialBSDF(material, idata.uv);
+    float3 reflectance = 0;
+    if (dot(materialBSDF.emissive, materialBSDF.emissive) == 0)
+    {
+        MaterialBRDF materialBRDF = MakeMaterialBRDF(material, idata.uv);
+        reflectance = evaluateBRDF(materialBRDF, idata.normal, ray.Direction, normalize(float3(1, 1, 1))); // TODO: sample a light in some reasonable way (NEE?)
+    }
+    else
+    {
+        reflectance = materialBSDF.emissive;
+    }
     return float4(reflectance, 1);
 }
 
@@ -157,11 +166,11 @@ void TraceCascades(uint3 did : SV_DispatchThreadID)
     const uint2 coord = did.xy;
     // constants for this probe
     const float2 probe_position = floor(coord / probe_size);                 // [0, num_probes] position of this probe in the grid of probes
-    const float2 probe_center = probe_position * probe_size + 0.5;         // [probe_size/2, res - probe_size/2] the texel coordinate of the center of this probe
-    const float2 probe_center_uv = probe_center * one_over_res;              // [0, 1] uv coordinate of this probe's center 
+    const float2 probe_center = probe_position * probe_size + 0.5;         // [probe_size/2, res - probe_size/2] the texel coordinate of the center of this probe (basically just recreating coord and adding .5?)
+    const float2 probe_center_uv = probe_center * one_over_res;              // [0, 1] uv coordinate of this probe's center (the difference to uv = coord/res is tiiiiiny)
     // constants for this pixel
     const float2 pos_in_probe = coord % probe_size;                          // [0, probe_size] position of this pixel in the probe
-
+    
     // get probe normal and see if it's on a surface
     float3 probe_normal = g_GeometryNormalBuffer.SampleLevel(g_TextureSampler, probe_center_uv, 0).xyz;
     const bool is_sky_pixel = dot(probe_normal, probe_normal) == 0.0;
@@ -209,14 +218,14 @@ void TraceCascades(uint3 did : SV_DispatchThreadID)
             float t = query.CommittedRayT();
             HitInfo hit = GetHitInfoRtInlineCommitted(query);
             IntersectData idata = MakeIntersectData(hit); // TODO: sample lights the correct way
-            //radiance.rgb = GetRadiance(idata, ray).rgb;
-            radiance.rgb = ray.Direction;
+            radiance.rgb = GetRadiance(idata, ray).rgb;
+            //radiance.rgb = ray.Direction;
             radiance.a = 0.0; // occluded
         }
         else if (g_cascadeId >= g_numCascades) // hit nothing, sample env. map if top cascade 
         {
-            //radiance.rgb = g_EnvironmentBuffer.SampleLevel(g_TextureSampler, ray.Direction, 0.0).rgb * 1.0;
-            radiance.rgb = float3(1, 1, 1) * 0.03;
+            radiance.rgb = g_EnvironmentBuffer.SampleLevel(g_TextureSampler, ray.Direction, 0.0).rgb * 1.0;
+            //radiance.rgb = float3(1, 1, 1) * 0.03;
         }
 #endif
     
@@ -229,17 +238,29 @@ void TraceCascades(uint3 did : SV_DispatchThreadID)
         float4 weights;
         uint2 top_left_bilin_probe_coord;
         BilinearSamples(probe_center, upper_probe_size, weights, top_left_bilin_probe_coord);
-        float4 bilinear_radiance = 0;
-        for (uint i = 0; i < 4; i++)
+        uint dir_index = pos_in_probe.x + probe_size.x * pos_in_probe.y;
+        uint dir_count = probe_size.x * probe_size.y;
+        uint base_dir_index = dir_index * 4;
+        
+        float4 merged = 0;
+        
+        for (uint u = 0; u < 4; u++)
         {
-            float2 offset = BilinearOffset(i);
-            float2 bilinear_idx = top_left_bilin_probe_coord + offset;
-            float2 bilinear_texel = bilinear_idx * upper_probe_size;
-            float4 bilinear_interval = g_lastCascade.Load(int3(bilinear_texel, 0));
-            bilinear_radiance += bilinear_interval * weights[i];
+            uint upper_dir_index = base_dir_index + u;
+            uint bilin_dir_coord = uint2(upper_dir_index % upper_probe_size.x, upper_dir_index / upper_probe_size.y);
+            float4 bilinear_radiance = 0;
+            for (uint i = 0; i < 4; i++)
+            {
+                float2 offset = BilinearOffset(i);
+                float2 bilinear_idx = top_left_bilin_probe_coord + offset;
+                float2 bilinear_texel = bilinear_idx * upper_probe_size + bilin_dir_coord;
+                float4 bilinear_interval = g_lastCascade.Load(int3(bilinear_texel, 0));
+                bilinear_radiance += MergeInterval(radiance, bilinear_interval) * weights[i];
+            }
+            merged += bilinear_radiance * 0.25;
         }
         
-        radiance = MergeInterval(radiance, bilinear_radiance);
+        radiance = merged;
 #endif
         t_radiance += radiance;
     }
