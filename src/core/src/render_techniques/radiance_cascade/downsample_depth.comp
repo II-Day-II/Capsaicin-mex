@@ -3,6 +3,7 @@ Texture2D g_Depth; // the full res depth texture
 uint g_mip_level;
 RWTexture2D<float2> o_MinMaxDepth; // the texture we're writing to
 
+// TODO: this is WAY too slow
 [numthreads(8,8,1)]
 void MinMaxDepth(uint3 did : SV_DispatchThreadID)
 {
@@ -25,8 +26,8 @@ void MinMaxDepth(uint3 did : SV_DispatchThreadID)
             float d = g_Depth.Load(int3(pos, 0)).r;
             min_depth = min(min_depth, d);
             max_depth = max(max_depth, d);
-            }
         }
+    }
     
     o_MinMaxDepth[coord / probe_size] = float2(min_depth, max_depth);
 }

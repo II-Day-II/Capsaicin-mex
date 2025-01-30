@@ -54,14 +54,19 @@ void RCTechnique::render([[maybe_unused]] CapsaicinInternal &capsaicin) noexcept
     uint2 buffer_dimensions = uint2(capsaicin.getWidth(), capsaicin.getHeight());
     
     // get min/max depths
-    gfxProgramSetParameter(gfx_, minmax_depth_program, "g_Depth", capsaicin.getAOVBuffer("Depth"));
-    gfxCommandBindKernel(gfx_, minmax_depth_kernel);
-    for (uint i = 0; i < 5; i++)
+    // TODO: 67% of frame time should NOT be here...
+    // TODO: this is being jittered every frame..?
     {
-        gfxProgramSetParameter(
-            gfx_, minmax_depth_program, "o_MinMaxDepth", capsaicin.getAOVBuffer("rc_MinMaxDepth"), i);
-        gfxProgramSetParameter(gfx_, minmax_depth_program, "g_mip_level", i);
-        gfxCommandDispatch(gfx_, buffer_dimensions.x / 8, buffer_dimensions.y / 8, 1);
+        gfxCommandBindKernel(gfx_, minmax_depth_kernel);
+        gfxProgramSetParameter(gfx_, minmax_depth_program, "g_Depth", capsaicin.getAOVBuffer("Depth"));
+        TimedSection minmax_depth(*this, "min_max_depth");
+        for (uint i = 0; i < 6; i++)
+        {
+            gfxProgramSetParameter(
+                gfx_, minmax_depth_program, "o_MinMaxDepth", capsaicin.getAOVBuffer("rc_MinMaxDepth"), i);
+            gfxProgramSetParameter(gfx_, minmax_depth_program, "g_mip_level", i);
+            gfxCommandDispatch(gfx_, buffer_dimensions.x / 8, buffer_dimensions.y / 8, 1);
+        }
     }
 
 
@@ -77,6 +82,7 @@ void RCTechnique::render([[maybe_unused]] CapsaicinInternal &capsaicin) noexcept
     gfxProgramSetParameter(gfx_, rc_program, "g_c0_length", c0_length);
     
     
+    // uniforms required by capsaicin utility code
     gfxProgramSetParameter(gfx_, rc_program, "g_Scene", capsaicin.getAccelerationStructure());
 
     gfxProgramSetParameter(
@@ -99,31 +105,37 @@ void RCTechnique::render([[maybe_unused]] CapsaicinInternal &capsaicin) noexcept
     gfxProgramSetParameter(gfx_, rc_program, "g_TransformBuffer", capsaicin.getTransformBuffer());
     gfxProgramSetParameter(gfx_, rc_program, "g_EnvironmentBuffer", capsaicin.getEnvironmentBuffer());
 
+    // the min_max buffer
+    gfxProgramSetParameter(gfx_, rc_program, "g_MinMaxDepth", capsaicin.getAOVBuffer("rc_MinMaxDepth"));
+
     gfxCommandBindKernel(gfx_, rc_kernel);
 
-    for (int cascade_level = cascade_count; cascade_level >= 0; cascade_level -= 1)
     {
-        bool  ping_pong   = cascade_level % 2 == 0;
-        gfxProgramSetParameter(gfx_, rc_program, "g_cascadeId", cascade_level);
+        TimedSection rc_probes(*this, "render_cascades");
+        for (int cascade_level = cascade_count; cascade_level >= 0; cascade_level -= 1)
+        {
+            bool  ping_pong   = cascade_level % 2 == 0;
+            gfxProgramSetParameter(gfx_, rc_program, "g_cascadeId", cascade_level);
         
         
-        //gfxProgramSetParameter(gfx_, rc_program, "g_lastCascade", rc_pingpong_textures[ping_pong ? 0 : 1]);
-        //gfxProgramSetParameter(gfx_, rc_program, "o_currentCascade", rc_pingpong_textures[ping_pong ? 1 : 0]);
+            //gfxProgramSetParameter(gfx_, rc_program, "g_lastCascade", rc_pingpong_textures[ping_pong ? 0 : 1]);
+            //gfxProgramSetParameter(gfx_, rc_program, "o_currentCascade", rc_pingpong_textures[ping_pong ? 1 : 0]);
 
-        gfxProgramSetParameter(gfx_, rc_program, "g_lastCascade", capsaicin.getAOVBuffer(ping_pong ? "rc_probes0" : "rc_probes1"));
-        gfxProgramSetParameter(gfx_, rc_program, "o_currentCascade", capsaicin.getAOVBuffer(ping_pong ? "rc_probes1" : "rc_probes0"));
+            gfxProgramSetParameter(gfx_, rc_program, "g_lastCascade", capsaicin.getAOVBuffer(ping_pong ? "rc_probes0" : "rc_probes1"));
+            gfxProgramSetParameter(gfx_, rc_program, "o_currentCascade", capsaicin.getAOVBuffer(ping_pong ? "rc_probes1" : "rc_probes0"));
 
-        uint32_t const *thread_nums = gfxKernelGetNumThreads(gfx_, rc_kernel);
-        uint32_t        x = thread_nums[0], y = thread_nums[1];
-        //uint32_t        thread_size_x = uint32_t(glm::ceil(cascade_dimensions.x / float(x)));
-        //uint32_t        thread_size_y = uint32_t(glm::ceil(cascade_dimensions.y / float(y)));
+            uint32_t const *thread_nums = gfxKernelGetNumThreads(gfx_, rc_kernel);
+            uint32_t        x = thread_nums[0], y = thread_nums[1];
+            //uint32_t        thread_size_x = uint32_t(glm::ceil(cascade_dimensions.x / float(x)));
+            //uint32_t        thread_size_y = uint32_t(glm::ceil(cascade_dimensions.y / float(y)));
         
-        uint32_t        thread_size_x = uint32_t(glm::ceil(buffer_dimensions.x / float(x)));
-        uint32_t        thread_size_y = uint32_t(glm::ceil(buffer_dimensions.y / float(y)));
+            uint32_t        thread_size_x = uint32_t(glm::ceil(buffer_dimensions.x / float(x)));
+            uint32_t        thread_size_y = uint32_t(glm::ceil(buffer_dimensions.y / float(y)));
 
-        gfxCommandDispatch(gfx_, thread_size_x, thread_size_y, 1); 
+            gfxCommandDispatch(gfx_, thread_size_x, thread_size_y, 1); 
+        }
+
     }
-
 
     if (capsaicin.getCurrentDebugView() == "RCProbes")
     {
@@ -174,9 +186,7 @@ AOVList RCTechnique::getAOVs() const noexcept
     //aovs.push_back({"rc_probes", AOV::Write, AOV::Clear, DXGI_FORMAT_R8G8B8A8_UNORM});
     aovs.push_back({"rc_probes0", AOV::ReadWrite, AOV::Clear, DXGI_FORMAT_R16G16B16A16_FLOAT, 1, 1920, 1080});
     aovs.push_back({"rc_probes1", AOV::ReadWrite, AOV::Clear, DXGI_FORMAT_R16G16B16A16_FLOAT, 1, 1920, 1080});
-    aovs.push_back({"rc_intermediate", AOV::ReadWrite, AOV::Clear, DXGI_FORMAT_R16G16B16A16_FLOAT});
-    aovs.push_back({"rc_final", AOV::Write, AOV::Clear, DXGI_FORMAT_R16G16B16A16_FLOAT});
-    aovs.push_back({"rc_MinMaxDepth", AOV::ReadWrite, AOV::Clear, DXGI_FORMAT_R32G32_FLOAT, 5});
+    aovs.push_back({"rc_MinMaxDepth", AOV::ReadWrite, AOV::Clear, DXGI_FORMAT_R32G32_FLOAT, 6});
     return aovs;
 }
 
