@@ -146,7 +146,7 @@ float4 GetRadiance(IntersectData idata, RayDesc ray)
 
 /*- direction mapping: 
  *  source <https://www.shadertoy.com/view/4cjczV> -*/
-#define MIRROR 1
+#define MIRROR 0
 
 float3 octahedral_unmap(float2 e)
 {
@@ -224,7 +224,7 @@ void TraceCascades(uint3 did : SV_DispatchThreadID)
         // get a ray direction for this pixel in the probe
         const float2 uv_in_probe = (pos_in_probe + 0.5) / probe_size;
         
-        float3 direction = octahedral_unmap(uv_in_probe);
+        float3 direction = octahedral_unmap(uv_in_probe); // TODO: this only samples 4 points on a circle if probe_size is 4x4
         //float3 direction = costheta_unmap(uv_in_probe);
         
         // TODO: apparently I'm not supposed to do normal-aligned directions, instead do a full sphere. //
@@ -299,13 +299,14 @@ void TraceCascades(uint3 did : SV_DispatchThreadID)
                 float weight = weights[i];
                 #if BILATERAL_UPSAMPLING
                 // TODO: min/max here? currently just doing min
-                // TODO: this simply does not work
+                // TODO: this simply does not work. Do I need to use worldspace depth instead of [0, 1]?
                 float2 bilinear_uv = bilinear_texel / resolution; // surely this can't go wrong
                 //float current_depth = g_MinMaxDepth.SampleLevel(g_NearestSampler, bilinear_uv, g_cascadeId + 0).r;
-                //float upper_depth = g_MinMaxDepth.SampleLevel(g_NearestSampler, bilinear_uv, g_cascadeId + 1).r;
-                float2 minmax_depth = g_MinMaxDepth.SampleLevel(g_NearestSampler, bilinear_uv, g_cascadeId + 2).rg;
-                //weight *= exp(-100 * abs(current_depth - upper_depth));
-                weight *= exp(-100 * abs(minmax_depth.r - minmax_depth.g));
+                float current_depth = g_MinMaxDepth.SampleLevel(g_NearestSampler, bilinear_uv, 0).r;
+                float upper_depth = g_MinMaxDepth.SampleLevel(g_NearestSampler, bilinear_uv, g_cascadeId + 1).g;
+                //float2 minmax_depth = g_MinMaxDepth.SampleLevel(g_NearestSampler, bilinear_uv, g_cascadeId + 2).rg;
+                weight *= exp(-100 * abs(current_depth - upper_depth));
+                //weight *= exp(-100 * abs(minmax_depth.r - minmax_depth.g));
                 #endif
                 bilinear_radiance += MergeInterval(radiance, bilinear_interval) * weight;
                 total_weight += weight;

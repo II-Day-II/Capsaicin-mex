@@ -79,8 +79,6 @@ protected:
 
     RenderOptions options;
     GfxKernel     rc_kernel;
-    //GfxKernel     rc_intermediate_kernel;
-    //GfxKernel     rc_finalize_kernel; 
     GfxProgram    rc_program;
 
     GfxProgram minmax_depth_program;

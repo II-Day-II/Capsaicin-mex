@@ -25,8 +25,10 @@ void RCTechnique::terminate() noexcept
 {
     gfxDestroyProgram(gfx_, rc_program);
     gfxDestroyKernel(gfx_, rc_kernel);
-    //gfxDestroyKernel(gfx_, rc_intermediate_kernel);
-    //gfxDestroyKernel(gfx_, rc_finalize_kernel);
+    
+    gfxDestroyProgram(gfx_, minmax_depth_program);
+    gfxDestroyKernel(gfx_, minmax_depth_kernel);
+
     gfxDestroyTexture(gfx_, rc_pingpong_textures[0]);
     gfxDestroyTexture(gfx_, rc_pingpong_textures[1]);
     if (!!debug_rc_program)
@@ -48,24 +50,31 @@ void RCTechnique::render([[maybe_unused]] CapsaicinInternal &capsaicin) noexcept
         gfxDestroyProgram(gfx_, rc_program);
         gfxDestroyKernel(gfx_, rc_kernel);
 
+        gfxDestroyProgram(gfx_, minmax_depth_program);
+        gfxDestroyKernel(gfx_, minmax_depth_kernel);
+
         initKernel(capsaicin);
     }
 
     uint2 buffer_dimensions = uint2(capsaicin.getWidth(), capsaicin.getHeight());
+
+    // TODO: move these things to render settings so ui can change them
+    uint cascade_count = 5;
+    gfxProgramSetParameter(gfx_, rc_program, "g_numCascades", cascade_count);
+    float c0_length = 0.1f;
+    gfxProgramSetParameter(gfx_, rc_program, "g_c0_length", c0_length);
     
     // get min/max depths
-    // TODO: 67% of frame time should NOT be here...
-    // TODO: this is being jittered every frame..?
     {
         gfxCommandBindKernel(gfx_, minmax_depth_kernel);
-        gfxProgramSetParameter(gfx_, minmax_depth_program, "g_Depth", capsaicin.getAOVBuffer("Depth"));
+        gfxProgramSetParameter(gfx_, minmax_depth_program, "g_Depth", capsaicin.getAOVBuffer("VisibilityDepth"));
         TimedSection minmax_depth(*this, "min_max_depth");
-        for (uint i = 0; i < 6; i++)
+        for (uint i = 0; i <= cascade_count; i++)
         {
             gfxProgramSetParameter(
                 gfx_, minmax_depth_program, "o_MinMaxDepth", capsaicin.getAOVBuffer("rc_MinMaxDepth"), i);
             gfxProgramSetParameter(gfx_, minmax_depth_program, "g_mip_level", i);
-            gfxCommandDispatch(gfx_, buffer_dimensions.x / 8, buffer_dimensions.y / 8, 1);
+            gfxCommandDispatch(gfx_, (uint32_t)glm::ceil((buffer_dimensions.x >> i) / 8.0), (uint32_t)glm::ceil((buffer_dimensions.y >> i) / 8.0), 1);
         }
     }
 
@@ -73,13 +82,8 @@ void RCTechnique::render([[maybe_unused]] CapsaicinInternal &capsaicin) noexcept
 
     gfxProgramSetParameter(gfx_, rc_program, "g_BufferDimensions", buffer_dimensions);
     uint2 cascade_dimensions = buffer_dimensions / 2u;
-    gfxProgramSetParameter(gfx_, rc_program, "g_CascadeTexDimensions", cascade_dimensions);
+    gfxProgramSetParameter(gfx_, rc_program, "g_CascadeTexDimensions", cascade_dimensions); // TODO: use this size for cascades and upscale in composition pass
 
-    // TODO: move these things to render settings so ui can change them
-    uint cascade_count = 5;
-    gfxProgramSetParameter(gfx_, rc_program, "g_numCascades", cascade_count);
-    float c0_length = 0.1f;
-    gfxProgramSetParameter(gfx_, rc_program, "g_c0_length", c0_length);
     
     
     // uniforms required by capsaicin utility code
@@ -105,7 +109,7 @@ void RCTechnique::render([[maybe_unused]] CapsaicinInternal &capsaicin) noexcept
     gfxProgramSetParameter(gfx_, rc_program, "g_TransformBuffer", capsaicin.getTransformBuffer());
     gfxProgramSetParameter(gfx_, rc_program, "g_EnvironmentBuffer", capsaicin.getEnvironmentBuffer());
 
-    // the min_max buffer
+    // the min_max depth buffer
     gfxProgramSetParameter(gfx_, rc_program, "g_MinMaxDepth", capsaicin.getAOVBuffer("rc_MinMaxDepth"));
 
     gfxCommandBindKernel(gfx_, rc_kernel);

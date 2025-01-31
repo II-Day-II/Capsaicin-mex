@@ -8,9 +8,11 @@ RWTexture2D<float2> o_MinMaxDepth; // the texture we're writing to
 void MinMaxDepth(uint3 did : SV_DispatchThreadID)
 {
     uint2 coord = did.xy; // TODO: work out coord range per mip math
-    float orig_depth = g_Depth.Load(int3(coord, 0)).r;
-    float min_depth = orig_depth, max_depth = orig_depth;
     uint2 probe_size = pow(2, g_mip_level);
+    uint2 read_coord = coord * probe_size;
+    float orig_depth = g_Depth.Load(int3(read_coord, 0)).r;
+    float min_depth = orig_depth, max_depth = orig_depth;
+    
     uint2 dimensions;
     uint unused;
     g_Depth.GetDimensions(0, dimensions.x, dimensions.y, unused);
@@ -18,7 +20,7 @@ void MinMaxDepth(uint3 did : SV_DispatchThreadID)
     {
         for (uint x = 0; x < probe_size.x; x++)
         {
-            uint2 pos = coord + uint2(x, y);
+            uint2 pos = read_coord + uint2(x, y);
             if (any(pos > dimensions))
             {
                 continue;
@@ -29,5 +31,5 @@ void MinMaxDepth(uint3 did : SV_DispatchThreadID)
         }
     }
     
-    o_MinMaxDepth[coord / probe_size] = float2(min_depth, max_depth);
+    o_MinMaxDepth[coord] = float2(min_depth, max_depth);
 }
