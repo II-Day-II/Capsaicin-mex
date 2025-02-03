@@ -68,6 +68,10 @@ void RCTechnique::render([[maybe_unused]] CapsaicinInternal &capsaicin) noexcept
     {
         gfxCommandBindKernel(gfx_, minmax_depth_kernel);
         gfxProgramSetParameter(gfx_, minmax_depth_program, "g_Depth", capsaicin.getAOVBuffer("VisibilityDepth"));
+        float far_z = capsaicin.getCamera().farZ;
+        float near_z = capsaicin.getCamera().nearZ;
+        gfxProgramSetParameter(gfx_, minmax_depth_program, "g_near", near_z);
+        gfxProgramSetParameter(gfx_, minmax_depth_program, "g_far", far_z);
         TimedSection minmax_depth(*this, "min_max_depth");
         for (uint i = 0; i <= cascade_count; i++)
         {

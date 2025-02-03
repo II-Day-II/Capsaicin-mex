@@ -218,7 +218,7 @@ void TraceCascades(uint3 did : SV_DispatchThreadID)
     probe_normal = 2.0 * probe_normal - 1.0;
     const float3 origin = GetRayOrigin(probe_center, probe_normal);
     
-    float4 t_radiance = float4(0, 0, 0, 1);
+    float4 t_radiance = 0;
     // TODO: Do I need to do preaveraging (4 rays per pixel)?
     {
         // get a ray direction for this pixel in the probe
@@ -262,62 +262,71 @@ void TraceCascades(uint3 did : SV_DispatchThreadID)
         else if (g_cascadeId >= g_numCascades) // hit nothing, sample env. map if top cascade 
         {
             radiance.rgb = g_EnvironmentBuffer.SampleLevel(g_TextureSampler, ray.Direction, 0.0).rgb * 1.0;
+            radiance.a = 0;
             #if DEBUG_DISABLE_ENV_MAP
             radiance.rgb = 0;
             #endif
             //radiance.rgb = float3(1, 1, 1) * 0.03;
         }
 #endif
-    
 #if !DEBUG_DISABLE_MERGING
-        // TODO: depth aware upsampling of upper cascade, requires per-probe depth (mips?)
-        // TODO: figure out the cascade offsets
-    
-        // merge with upper cascade
-        float2 upper_probe_size = pow(2, cascade_index + 2);
-        float4 weights;
-        uint2 top_left_bilin_probe_coord;
-        BilinearSamples(probe_center, upper_probe_size, weights, top_left_bilin_probe_coord);
-        uint dir_index = pos_in_probe.x + probe_size.x * pos_in_probe.y;
-        uint dir_count = probe_size.x * probe_size.y;
-        uint base_dir_index = dir_index * 4;
-        
-        float4 merged = 0;
-        
-        for (uint u = 0; u < 4; u++)
+        if (g_cascadeId <= g_numCascades)
         {
-            uint upper_dir_index = base_dir_index + u;
-            uint2 bilin_dir_coord = uint2(upper_dir_index % upper_probe_size.x, upper_dir_index / upper_probe_size.y);
-            float4 bilinear_radiance = 0;
-            float total_weight = 0;
-            for (uint i = 0; i < 4; i++)
-            {
-                float2 offset = BilinearOffset(i);
-                float2 bilinear_idx = top_left_bilin_probe_coord + offset;
-                float2 bilinear_texel = bilinear_idx * upper_probe_size + bilin_dir_coord;
-                float4 bilinear_interval = g_lastCascade.Load(int3(bilinear_texel, 0));
-                float weight = weights[i];
-                #if BILATERAL_UPSAMPLING
-                // TODO: min/max here? currently just doing min
-                // TODO: this simply does not work. Do I need to use worldspace depth instead of [0, 1]?
-                float2 bilinear_uv = bilinear_texel / resolution; // surely this can't go wrong
-                //float current_depth = g_MinMaxDepth.SampleLevel(g_NearestSampler, bilinear_uv, g_cascadeId + 0).r;
-                float current_depth = g_MinMaxDepth.SampleLevel(g_NearestSampler, bilinear_uv, 0).r;
-                float upper_depth = g_MinMaxDepth.SampleLevel(g_NearestSampler, bilinear_uv, g_cascadeId + 1).g;
-                //float2 minmax_depth = g_MinMaxDepth.SampleLevel(g_NearestSampler, bilinear_uv, g_cascadeId + 2).rg;
-                weight *= exp(-100 * abs(current_depth - upper_depth));
-                //weight *= exp(-100 * abs(minmax_depth.r - minmax_depth.g));
-                #endif
-                bilinear_radiance += MergeInterval(radiance, bilinear_interval) * weight;
-                total_weight += weight;
-            }
-            merged += bilinear_radiance * 0.25 / total_weight;
-        }
+            // TODO: depth aware upsampling of upper cascade, requires per-probe depth (mips?)
+            // TODO: figure out the cascade offsets
+    
+            // merge with upper cascade
+            float2 upper_probe_size = probe_size * 2; //pow(2, cascade_index + 2);
+            float4 weights;
+            uint2 top_left_bilin_probe_coord;
+            BilinearSamples(probe_center, upper_probe_size, weights, top_left_bilin_probe_coord);
+            uint dir_index = pos_in_probe.x + probe_size.x * pos_in_probe.y;
+            uint dir_count = probe_size.x * probe_size.y;
+            uint base_dir_index = dir_index * 4;
         
-        radiance = merged;
+            float4 merged = 0;
+        
+            // TODO: should these loops be switched? 
+            // for each corresponding upper probe, average its corresponding directions
+            // then sample and merge those averages? Seems to make more sense to me...
+            
+            // upper probe traces 4 directions corresponding to this direction in this probe, average them out
+            for (uint u = 0; u < 4; u++) // for each corresponding upper direction 
+            {
+                uint upper_dir_index = base_dir_index + u;
+                uint2 bilin_dir_coord = uint2(upper_dir_index % upper_probe_size.x, upper_dir_index / upper_probe_size.y);
+                float4 bilinear_radiance = 0;
+                float total_weight = 0;
+                // bil(ateral|inear) sample the upper 4 probes
+                for (uint i = 0; i < 4; i++) // for each upper probe
+                {
+                    float2 offset = BilinearOffset(i);
+                    float2 bilinear_idx = top_left_bilin_probe_coord + offset;
+                    float2 bilinear_texel = bilinear_idx * upper_probe_size + bilin_dir_coord;
+                    float4 bilinear_interval = g_lastCascade.Load(int3(bilinear_texel, 0));
+                    float weight = weights[i];
+                    #if BILATERAL_UPSAMPLING
+                    // TODO: min/max here? currently just doing min
+                    // TODO: this simply does not work.
+                    float2 bilinear_uv = bilinear_texel / resolution; // surely this can't go wrong
+                    float current_depth = g_MinMaxDepth.SampleLevel(g_NearestSampler, bilinear_uv, g_cascadeId + 0).r;
+                    //float current_depth = g_MinMaxDepth.SampleLevel(g_NearestSampler, bilinear_uv, 0).r;
+                    float upper_depth = g_MinMaxDepth.SampleLevel(g_NearestSampler, bilinear_uv, g_cascadeId + 1).r;
+                    //float2 minmax_depth = g_MinMaxDepth.SampleLevel(g_NearestSampler, bilinear_uv, g_cascadeId + 2).rg;
+                    weight *= exp(-100 * abs(current_depth - upper_depth));
+                    //weight *= exp(-100 * abs(minmax_depth.r - minmax_depth.g));
+                    #endif
+                    bilinear_radiance += MergeInterval(radiance, bilinear_interval) * weight;
+                    total_weight += weight;
+                }
+                merged += bilinear_radiance / total_weight;
+            }
+        
+            radiance = merged * 0.25;
+        }
 #endif
-        t_radiance += radiance;
-    }
+        t_radiance = radiance;
+    } // preaveraging maybe?
 
     
     // return
