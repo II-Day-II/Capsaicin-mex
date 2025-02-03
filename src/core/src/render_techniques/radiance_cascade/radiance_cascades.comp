@@ -179,6 +179,7 @@ float3 costheta_unmap(float2 uv)
 #define DEBUG_DISABLE_MERGING 0
 #define DEBUG_DISABLE_ENV_MAP 0
 #define BILATERAL_UPSAMPLING 1
+#define MERGE_DIR_FIRST 0 // doesn't matter for bilinear, but bilateral has an effect here
 
 Texture2D g_lastCascade;
 RWTexture2D<float4> o_currentCascade;
@@ -220,6 +221,7 @@ void TraceCascades(uint3 did : SV_DispatchThreadID)
     
     float4 t_radiance = 0;
     // TODO: Do I need to do preaveraging (4 rays per pixel)?
+
     {
         // get a ray direction for this pixel in the probe
         const float2 uv_in_probe = (pos_in_probe + 0.5) / probe_size;
@@ -285,11 +287,13 @@ void TraceCascades(uint3 did : SV_DispatchThreadID)
             uint base_dir_index = dir_index * 4;
         
             float4 merged = 0;
+            float total_weight = 0;
         
             // TODO: should these loops be switched? 
             // for each corresponding upper probe, average its corresponding directions
             // then sample and merge those averages? Seems to make more sense to me...
             
+            #if MERGE_DIR_FIRST
             // upper probe traces 4 directions corresponding to this direction in this probe, average them out
             for (uint u = 0; u < 4; u++) // for each corresponding upper direction 
             {
@@ -305,7 +309,7 @@ void TraceCascades(uint3 did : SV_DispatchThreadID)
                     float2 bilinear_texel = bilinear_idx * upper_probe_size + bilin_dir_coord;
                     float4 bilinear_interval = g_lastCascade.Load(int3(bilinear_texel, 0));
                     float weight = weights[i];
-                    #if BILATERAL_UPSAMPLING
+#if BILATERAL_UPSAMPLING
                     // TODO: min/max here? currently just doing min
                     // TODO: this simply does not work.
                     float2 bilinear_uv = bilinear_texel / resolution; // surely this can't go wrong
@@ -315,14 +319,46 @@ void TraceCascades(uint3 did : SV_DispatchThreadID)
                     //float2 minmax_depth = g_MinMaxDepth.SampleLevel(g_NearestSampler, bilinear_uv, g_cascadeId + 2).rg;
                     weight *= exp(-100 * abs(current_depth - upper_depth));
                     //weight *= exp(-100 * abs(minmax_depth.r - minmax_depth.g));
-                    #endif
+#endif
                     bilinear_radiance += MergeInterval(radiance, bilinear_interval) * weight;
                     total_weight += weight;
                 }
                 merged += bilinear_radiance / total_weight;
             }
-        
             radiance = merged * 0.25;
+            #else
+            // for each upper probe
+            for (uint i = 0; i < 4; i++)
+            {
+                float2 offset = BilinearOffset(i);
+                float2 bilinear_idx = top_left_bilin_probe_coord + offset;
+                float4 bilinear_interval = 0;
+                // for each direction in uppper probe
+                for (uint d = 0; d < 4; d++)
+                {
+                    uint upper_dir_index = base_dir_index + d;
+                    uint2 bilin_dir_coord = uint2(upper_dir_index % upper_probe_size.x, upper_dir_index / upper_probe_size.y);
+                    float2 bilinear_texel = bilinear_idx * upper_probe_size + bilin_dir_coord;
+                    float4 samp = g_lastCascade.Load(int3(bilinear_texel, 0));
+                    bilinear_interval += samp;
+                }
+                bilinear_interval *= 0.25; // average out the corresponding directions
+                
+                float weight = weights[i];
+                #if BILATERAL_UPSAMPLING
+                float2 bilinear_uv = (bilinear_idx) * upper_probe_size / resolution; // surely this can't go wrong
+                float current_depth = g_MinMaxDepth.SampleLevel(g_NearestSampler, bilinear_uv, g_cascadeId + 0).r;
+            
+                float upper_depth = g_MinMaxDepth.SampleLevel(g_NearestSampler, bilinear_uv, g_cascadeId + 1).r;
+            
+                weight *= exp(-100 * abs(current_depth - upper_depth));
+                #endif
+                merged += MergeInterval(radiance, bilinear_interval) * weight;
+                total_weight += weight;
+            }
+        
+            radiance = merged / total_weight;
+            #endif
         }
 #endif
         t_radiance = radiance;
