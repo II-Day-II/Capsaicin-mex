@@ -25,6 +25,7 @@ void RCTechnique::terminate() noexcept
 {
     gfxDestroyProgram(gfx_, rc_program);
     gfxDestroyKernel(gfx_, rc_kernel);
+    gfxDestroyKernel(gfx_, rc_kernel_preavg);
     
     gfxDestroyProgram(gfx_, minmax_depth_program);
     gfxDestroyKernel(gfx_, minmax_depth_kernel);
@@ -47,11 +48,7 @@ void RCTechnique::render([[maybe_unused]] CapsaicinInternal &capsaicin) noexcept
     options                  = newOptions;
     if (recompile)
     {
-        gfxDestroyProgram(gfx_, rc_program);
-        gfxDestroyKernel(gfx_, rc_kernel);
-
-        gfxDestroyProgram(gfx_, minmax_depth_program);
-        gfxDestroyKernel(gfx_, minmax_depth_kernel);
+        terminate();
 
         initKernel(capsaicin);
     }
@@ -68,10 +65,6 @@ void RCTechnique::render([[maybe_unused]] CapsaicinInternal &capsaicin) noexcept
     {
         gfxCommandBindKernel(gfx_, minmax_depth_kernel);
         gfxProgramSetParameter(gfx_, minmax_depth_program, "g_Depth", capsaicin.getAOVBuffer("VisibilityDepth"));
-        float far_z = capsaicin.getCamera().farZ;
-        float near_z = capsaicin.getCamera().nearZ;
-        gfxProgramSetParameter(gfx_, minmax_depth_program, "g_near", near_z);
-        gfxProgramSetParameter(gfx_, minmax_depth_program, "g_far", far_z);
         TimedSection minmax_depth(*this, "min_max_depth");
         for (uint i = 0; i <= cascade_count; i++)
         {
@@ -113,12 +106,22 @@ void RCTechnique::render([[maybe_unused]] CapsaicinInternal &capsaicin) noexcept
     gfxProgramSetParameter(gfx_, rc_program, "g_TransformBuffer", capsaicin.getTransformBuffer());
     gfxProgramSetParameter(gfx_, rc_program, "g_EnvironmentBuffer", capsaicin.getEnvironmentBuffer());
 
+    //gfxProgramSetParameter(gfx_, rc_program, "g_InvProj", capsaicin.getCameraMatrices().inv_projection);
+    //gfxProgramSetParameter(gfx_, rc_program, "g_InvView", capsaicin.getCameraMatrices().inv_view);
+    gfxProgramSetParameter(
+        gfx_, rc_program, "g_ViewProjectionInverse", capsaicin.getCameraMatrices().inv_view_projection);
+
     // the min_max depth buffer
     gfxProgramSetParameter(gfx_, rc_program, "g_MinMaxDepth", capsaicin.getAOVBuffer("rc_MinMaxDepth"));
 
-    gfxCommandBindKernel(gfx_, rc_kernel);
+    gfxCommandBindKernel(gfx_, options.rc_do_preaveraging ? rc_kernel_preavg : rc_kernel);
 
     {
+        float far_z = capsaicin.getCamera().farZ;
+        float near_z = capsaicin.getCamera().nearZ;
+        gfxProgramSetParameter(gfx_, rc_program, "g_near", near_z);
+        gfxProgramSetParameter(gfx_, rc_program, "g_far", far_z);
+
         TimedSection rc_probes(*this, "render_cascades");
         for (int cascade_level = cascade_count; cascade_level >= 0; cascade_level -= 1)
         {
@@ -167,6 +170,7 @@ RenderOptionList RCTechnique::getRenderOptions() noexcept
     RenderOptionList newOptions;
     newOptions.emplace(RENDER_OPTION_MAKE(rc_cascade_count, options));
     newOptions.emplace(RENDER_OPTION_MAKE(rc_debug_cascade_stop, options));
+    newOptions.emplace(RENDER_OPTION_MAKE(rc_do_preaveraging, options));
     return newOptions;
 }
 
@@ -176,6 +180,7 @@ RCTechnique::RenderOptions RCTechnique::convertOptions(
     RenderOptions newOptions;
     RENDER_OPTION_GET(rc_cascade_count, newOptions, options);
     RENDER_OPTION_GET(rc_debug_cascade_stop, newOptions, options);
+    RENDER_OPTION_GET(rc_do_preaveraging, newOptions, options);
     return newOptions;
 }
 
@@ -217,6 +222,7 @@ bool RCTechnique::initKernel(CapsaicinInternal const& capsaicin) noexcept
 
     rc_kernel = gfxCreateComputeKernel(
         gfx_, rc_program, "TraceCascades", defines.data(), (uint32_t)defines.size()); 
+    rc_kernel_preavg = gfxCreateComputeKernel(gfx_, rc_program, "TraceCascadesPreAvg", defines.data(), (uint32_t)defines.size());
 
     minmax_depth_program = gfxCreateProgram(
         gfx_, "render_techniques/radiance_cascade/downsample_depth", capsaicin.getShaderPath());

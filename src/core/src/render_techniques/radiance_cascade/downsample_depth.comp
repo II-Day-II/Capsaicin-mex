@@ -3,20 +3,7 @@ Texture2D g_Depth; // the full res depth texture
 uint g_mip_level;
 RWTexture2D<float2> o_MinMaxDepth; // the texture we're writing to
 
-float g_near;
-float g_far;
 
-// TODO: get worldspace depth so far is significantly further than like 0.0001 units in the standard depth buffer
-float LinearizeDepth(float depth)
-{
-
-    // TODO: get actual perspective parameters
-    const float near = g_near; // 0.1;
-    const float far = g_far;  // 1e4;
-    float ndcz = 2.0 * depth - 1.0;
-    return (2.0 * near * far) / (far + near - ndcz * (far - near));
-    return depth;
-}
 
 // TODO: this is WAY too slow
 [numthreads(8,8,1)]
@@ -25,7 +12,7 @@ void MinMaxDepth(uint3 did : SV_DispatchThreadID)
     uint2 coord = did.xy; // TODO: work out coord range per mip math
     uint2 probe_size = pow(2, g_mip_level);
     uint2 read_coord = coord * probe_size;
-    float orig_depth = LinearizeDepth(g_Depth.Load(int3(read_coord, 0)).r);
+    float orig_depth = g_Depth.Load(int3(read_coord, 0)).r;
     float min_depth = orig_depth, max_depth = orig_depth;
     
     uint2 dimensions;
@@ -40,7 +27,7 @@ void MinMaxDepth(uint3 did : SV_DispatchThreadID)
             {
                 continue;
             }
-            float d = LinearizeDepth(g_Depth.Load(int3(pos, 0)).r);
+            float d = g_Depth.Load(int3(pos, 0)).r;
             min_depth = min(min_depth, d);
             max_depth = max(max_depth, d);
         }

@@ -20,6 +20,7 @@ public:
         // TODO: put parameters here, e.g. min/max bounds
         uint rc_cascade_count = 5;
         uint rc_debug_cascade_stop = 0;
+        bool rc_do_preaveraging    = false;
     };
 
     /**
@@ -79,6 +80,7 @@ protected:
 
     RenderOptions options;
     GfxKernel     rc_kernel;
+    GfxKernel     rc_kernel_preavg;
     GfxProgram    rc_program;
 
     GfxProgram minmax_depth_program;
