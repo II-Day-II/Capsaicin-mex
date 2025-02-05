@@ -33,6 +33,7 @@ THE SOFTWARE.
 #include <gfx_imgui.h>
 #include <glm/gtc/matrix_transform.hpp>
 #include <math.h>
+#include <gfx.h>
 
 namespace Capsaicin
 {
@@ -2203,9 +2204,9 @@ void CapsaicinInternal::setupRenderTechniques(std::string_view const &name) noex
             DXGI_FORMAT      format;
             AOV::Flags       flags;
             std::string_view backup = std::string_view();
-            uint             mips = 1;
-            uint             width = 1920;
-            uint             height = 1080;
+            std::optional<uint>             mips = std::nullopt;
+            std::optional<uint>             width = std::nullopt; 
+            std::optional<uint>             height = std::nullopt;
         };
 
         // We use 3 main default AOVs that are always available
@@ -2391,9 +2392,26 @@ void CapsaicinInternal::setupRenderTechniques(std::string_view const &name) noex
         // Create all requested AOVs
         for (auto &i : requestedAOVs)
         {
+            GfxTexture          texture;
+            std::optional<uint> height = i.second.height, width = i.second.width, mips = i.second.mips;
+            
+            if (height.has_value() && width.has_value())
+            {
+                texture = gfxCreateTexture2D(
+                    gfx_, width.value(), height.value(), i.second.format, mips.value_or(1));
+            }
+            else if (mips.has_value())
+            {
+
+                //texture = GfxInternal::GetGfx(gfx_)->createTexture2D(1080, 1920, i.second.format, mips.value(), nullptr, 1);
+                texture = gfxCreateTexture2D(gfx_, 1080, 1920, i.second.format, mips.value()); // Issue: can't tell this to kFlagsAutoResize
+            }
+            else
+            {
+                texture = gfxCreateTexture2D(gfx_, i.second.format);
+            }
             // Create new texture
-            GfxTexture texture =
-                gfxCreateTexture2D(gfx_, i.second.width, i.second.height, i.second.format, i.second.mips);
+            //GfxTexture texture = gfxCreateTexture2D(gfx_, i.second.width, i.second.height, i.second.format, i.second.mips);
             //GfxTexture  texture    = gfxCreateTexture2D(gfx_, i.second.format);
             std::string bufferName = "Capsaicin_";
             bufferName += i.first;

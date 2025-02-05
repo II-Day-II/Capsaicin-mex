@@ -155,7 +155,7 @@ float4 GetRadiance(IntersectData idata, RayDesc ray)
         // TODO: should we even look at direct lighting here? Seems stupid
         MaterialBRDF materialBRDF = MakeMaterialBRDF(material, idata.uv);
         reflectance = evaluateBRDF(materialBRDF, idata.normal, ray.Direction, normalize(float3(1, 1, 1))); 
-        reflectance = 0;
+        //reflectance = 0;
     }
     else
     {
@@ -197,7 +197,7 @@ float3 costheta_unmap(float2 uv)
 
 #define DEBUG_DIRECTIONS 0
 #define DEBUG_DISABLE_MERGING 0
-#define DEBUG_DISABLE_ENV_MAP 1
+#define DEBUG_DISABLE_ENV_MAP 0
 #define BILATERAL_UPSAMPLING 1
 #define MERGE_DIR_FIRST 0 // doesn't matter for bilinear, but bilateral has an effect here
 #define SPHERE_MAP_OCTAHEDRAL 1

@@ -220,7 +220,7 @@ AOVList RCTechnique::getAOVs() const noexcept
     //aovs.push_back({"rc_probes", AOV::Write, AOV::Clear, DXGI_FORMAT_R8G8B8A8_UNORM});
     aovs.push_back({"rc_probes0", AOV::ReadWrite, AOV::Clear, DXGI_FORMAT_R16G16B16A16_FLOAT, 1, 1920, 1080});
     aovs.push_back({"rc_probes1", AOV::ReadWrite, AOV::Clear, DXGI_FORMAT_R16G16B16A16_FLOAT, 1, 1920, 1080});
-    aovs.push_back({"rc_MinMaxDepth", AOV::ReadWrite, AOV::Clear, DXGI_FORMAT_R32G32_FLOAT, 6});
+    aovs.push_back({"rc_MinMaxDepth", AOV::ReadWrite, AOV::Clear, DXGI_FORMAT_R32G32_FLOAT, 6, 1920, 1080});
    
     aovs.push_back({"GlobalIllumination", AOV::Write, AOV::None, DXGI_FORMAT_R16G16B16A16_FLOAT});
     /*aovs.push_back({.name = "Reflection",

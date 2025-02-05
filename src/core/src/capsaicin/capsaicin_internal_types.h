@@ -26,6 +26,7 @@ THE SOFTWARE.
 #include <string_view>
 #include <variant>
 #include <vector>
+#include <optional>
 
 namespace Capsaicin
 {
@@ -55,9 +56,9 @@ struct AOV
     const DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN; /**< The internal buffer format (If using read then
                                                        format can be set to unknown to use auto setup) */
 
-    uint32_t const mips = 1; /**< the number of mips for this rendertarget */
-    uint32_t const width = 1920; /**< the width of this rendertarget */
-    uint32_t const height = 1080; /**< the height of this rendertarget */
+    std::optional<uint32_t> const mips = std::nullopt; /**< the number of mips for this rendertarget */
+    std::optional<uint32_t> const width = std::nullopt; /**< the width of this rendertarget */
+    std::optional<uint32_t> const height = std::nullopt; /**< the height of this rendertarget */
 
     const std::string_view backup_name =
         std::string_view(); /**< The name to identify the AOV backup (blank if no backup required) */
