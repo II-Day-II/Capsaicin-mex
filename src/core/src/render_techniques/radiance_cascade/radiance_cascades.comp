@@ -152,8 +152,10 @@ float4 GetRadiance(IntersectData idata, RayDesc ray)
     {
         // TODO: sample a light in some reasonable way (NEE?)
         // TODO: account for whether the light is occluded as well (we have no shadow maps QmQ)
+        // TODO: should we even look at direct lighting here? Seems stupid
         MaterialBRDF materialBRDF = MakeMaterialBRDF(material, idata.uv);
         reflectance = evaluateBRDF(materialBRDF, idata.normal, ray.Direction, normalize(float3(1, 1, 1))); 
+        reflectance = 0;
     }
     else
     {
@@ -199,6 +201,8 @@ float3 costheta_unmap(float2 uv)
 #define BILATERAL_UPSAMPLING 1
 #define MERGE_DIR_FIRST 0 // doesn't matter for bilinear, but bilateral has an effect here
 #define SPHERE_MAP_OCTAHEDRAL 1
+
+#define EPSILON 0.0001
 
 Texture2D g_lastCascade;
 RWTexture2D<float4> o_currentCascade;
@@ -314,25 +318,25 @@ void TraceCascadesPreAvg(uint3 did : SV_DispatchThreadID) // should probably be 
                 // TODO: min/max here? currently just doing min
                 // TODO: this simply does not work.
                 float2 bilinear_uv = bilinear_texel / resolution; // surely this can't go wrong
-                float current_depth = LinearizeDepth(g_MinMaxDepth.SampleLevel(g_NearestSampler, bilinear_uv, g_cascadeId + 0).r);
+                float current_depth = LinearizeDepth(g_MinMaxDepth.SampleLevel(g_NearestSampler, probe_center_uv, g_cascadeId + 0).r);
                 //float current_depth = LinearizeDepth(g_MinMaxDepth.SampleLevel(g_NearestSampler, bilinear_uv, 0).r);
                 float upper_depth = LinearizeDepth(g_MinMaxDepth.SampleLevel(g_NearestSampler, bilinear_uv, g_cascadeId + 1).r);
-                weight *= exp(-100 * abs(current_depth - upper_depth));
+                weight *= max(exp(-100 * abs(current_depth - upper_depth)), EPSILON);
                 //float2 minmax_depth = g_MinMaxDepth.SampleLevel(g_NearestSampler, bilinear_uv, g_cascadeId + 2).rg;
                 //weight *= exp(-100 * abs(LinearizeDepth(minmax_depth.r) - LinearizeDepth(minmax_depth.g)));
 #endif
                 merged_radiance += MergeInterval(curr_radiance, bilinear_interval) * weight;
                 total_weight += weight;
             }
-            if (total_weight == 0)
-            {
-                t_radiance.rgb += float3(1, 0, 1);
-            }
-            else
-            {
+            //if (total_weight == 0)
+            //{
+            //    t_radiance.rgb += float3(1, 0, 1);
+            //}
+            //else
+            //{
                 merged_radiance /= total_weight;
                 t_radiance += merged_radiance;
-            }
+            //}
         } // merging
     } // preaveraging 
 
@@ -467,7 +471,7 @@ void TraceCascades(uint3 did : SV_DispatchThreadID)
                 float current_depth = LinearizeDepth(g_MinMaxDepth.SampleLevel(g_NearestSampler, bilinear_uv, g_cascadeId + 0).r);
                 //float current_depth = LinearizeDepth(g_MinMaxDepth.SampleLevel(g_NearestSampler, bilinear_uv, 0).r);
                 float upper_depth = LinearizeDepth(g_MinMaxDepth.SampleLevel(g_NearestSampler, bilinear_uv, g_cascadeId + 1).r);
-                weight *= exp(-100 * abs(current_depth - upper_depth));
+                weight *= max(exp(-100 * abs(current_depth - upper_depth)), EPSILON);
                 //float2 minmax_depth = g_MinMaxDepth.SampleLevel(g_NearestSampler, bilinear_uv, g_cascadeId + 2).rg;
                 //weight *= exp(-100 * abs(LinearizeDepth(minmax_depth.r) - LinearizeDepth(minmax_depth.g)));
 #endif
@@ -498,18 +502,18 @@ void TraceCascades(uint3 did : SV_DispatchThreadID)
             float weight = weights[i];
             #if BILATERAL_UPSAMPLING
             float2 bilinear_uv = (bilinear_idx) * upper_probe_size / resolution; // surely this can't go wrong
-            float current_depth = LinearizeDepth(g_MinMaxDepth.SampleLevel(g_NearestSampler, bilinear_uv, g_cascadeId + 0).r);
+            float current_depth = LinearizeDepth(g_MinMaxDepth.SampleLevel(g_NearestSampler, probe_center_uv, g_cascadeId + 0).r);
             
             float upper_depth = LinearizeDepth(g_MinMaxDepth.SampleLevel(g_NearestSampler, bilinear_uv, g_cascadeId + 1).r);
             
-            weight *= exp(-100 * abs(current_depth - upper_depth));
+            weight *= max(exp(-100 * abs(current_depth - upper_depth)), EPSILON);
             #endif
             merged += MergeInterval(radiance, bilinear_interval) * weight;
             total_weight += weight;
         }
-        if (total_weight == 0.0 || isnan(total_weight) || isinf(total_weight))
-            radiance.rgb = float3(1, 0, 1);
-        else 
+        //if (total_weight == 0.0 || isnan(total_weight) || isinf(total_weight))
+        //    radiance.rgb = float3(1, 0, 1);
+        //else 
             radiance = merged / total_weight;
         #endif
     }

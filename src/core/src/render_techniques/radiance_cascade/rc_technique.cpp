@@ -1,4 +1,6 @@
 #include "rc_technique.h"
+#include "components/brdf_lut/brdf_lut.h"
+
 #include "capsaicin_internal.h"
 
 namespace Capsaicin
@@ -53,6 +55,8 @@ void RCTechnique::render([[maybe_unused]] CapsaicinInternal &capsaicin) noexcept
         initKernel(capsaicin);
     }
 
+    auto brdf_lut = capsaicin.getComponent<BrdfLut>();
+
     uint2 buffer_dimensions = uint2(capsaicin.getWidth(), capsaicin.getHeight());
 
     // TODO: move these things to render settings so ui can change them
@@ -94,8 +98,16 @@ void RCTechnique::render([[maybe_unused]] CapsaicinInternal &capsaicin) noexcept
     gfxProgramSetParameter(gfx_, rc_program, "g_TextureSampler", capsaicin.getLinearSampler());
 
     gfxProgramSetParameter(gfx_, rc_program, "g_Depth", capsaicin.getAOVBuffer("VisibilityDepth"));
+
+
     gfxProgramSetParameter(
         gfx_, rc_program, "g_GeometryNormalBuffer", capsaicin.getAOVBuffer("GeometryNormal"));
+    gfxProgramSetParameter(
+        gfx_, rc_program, "g_ShadingNormalBuffer", capsaicin.getAOVBuffer("ShadingNormal"));
+    gfxProgramSetParameter(gfx_, rc_program, "g_DepthBuffer", capsaicin.getAOVBuffer("VisibilityDepth"));
+
+    brdf_lut->addProgramParameters(capsaicin, rc_program);
+
     gfxProgramSetParameter(gfx_, rc_program, "g_VisibilityBuffer", capsaicin.getAOVBuffer("Visibility"));
     gfxProgramSetParameter(gfx_, rc_program, "g_IndexBuffer", capsaicin.getIndexBuffer());
     gfxProgramSetParameter(gfx_, rc_program, "g_VertexBuffer", capsaicin.getVertexBuffer());
@@ -106,10 +118,11 @@ void RCTechnique::render([[maybe_unused]] CapsaicinInternal &capsaicin) noexcept
     gfxProgramSetParameter(gfx_, rc_program, "g_TransformBuffer", capsaicin.getTransformBuffer());
     gfxProgramSetParameter(gfx_, rc_program, "g_EnvironmentBuffer", capsaicin.getEnvironmentBuffer());
 
-    //gfxProgramSetParameter(gfx_, rc_program, "g_InvProj", capsaicin.getCameraMatrices().inv_projection);
-    //gfxProgramSetParameter(gfx_, rc_program, "g_InvView", capsaicin.getCameraMatrices().inv_view);
+
+
     gfxProgramSetParameter(
         gfx_, rc_program, "g_ViewProjectionInverse", capsaicin.getCameraMatrices().inv_view_projection);
+    gfxProgramSetParameter(gfx_, rc_program, "g_Eye", capsaicin.getCamera().eye);
 
     // the min_max depth buffer
     gfxProgramSetParameter(gfx_, rc_program, "g_MinMaxDepth", capsaicin.getAOVBuffer("rc_MinMaxDepth"));
@@ -146,6 +159,13 @@ void RCTechnique::render([[maybe_unused]] CapsaicinInternal &capsaicin) noexcept
             gfxCommandDispatch(gfx_, thread_size_x, thread_size_y, 1); 
         }
 
+    }
+
+    {
+        TimedSection resolve(*this, "ResolveRCGI");
+        gfxProgramSetParameter(gfx_, rc_program, "g_IrradianceBuffer", capsaicin.getAOVBuffer("rc_probes1")); // TODO: get the last one used instead of hardcoding this
+        gfxCommandBindKernel(gfx_, rc_resolve_kernel);
+        gfxCommandDraw(gfx_, 3);
     }
 
     if (capsaicin.getCurrentDebugView() == "RCProbes")
@@ -187,6 +207,7 @@ RCTechnique::RenderOptions RCTechnique::convertOptions(
 ComponentList RCTechnique::getComponents() const noexcept 
 {
     ComponentList components;
+    components.push_back(COMPONENT_MAKE(BrdfLut));
     return components;
 }
 
@@ -200,6 +221,15 @@ AOVList RCTechnique::getAOVs() const noexcept
     aovs.push_back({"rc_probes0", AOV::ReadWrite, AOV::Clear, DXGI_FORMAT_R16G16B16A16_FLOAT, 1, 1920, 1080});
     aovs.push_back({"rc_probes1", AOV::ReadWrite, AOV::Clear, DXGI_FORMAT_R16G16B16A16_FLOAT, 1, 1920, 1080});
     aovs.push_back({"rc_MinMaxDepth", AOV::ReadWrite, AOV::Clear, DXGI_FORMAT_R32G32_FLOAT, 6});
+   
+    aovs.push_back({"GlobalIllumination", AOV::Write, AOV::None, DXGI_FORMAT_R16G16B16A16_FLOAT});
+    /*aovs.push_back({.name = "Reflection",
+        .access           = AOV::Write,
+        .flags            = AOV::None,
+        .format           = DXGI_FORMAT_R16G16B16A16_FLOAT,
+        .backup_name      = "PrevReflection"});*/
+
+    aovs.push_back({.name = "ShadingNormal"});
     return aovs;
 }
 
@@ -223,6 +253,11 @@ bool RCTechnique::initKernel(CapsaicinInternal const& capsaicin) noexcept
     rc_kernel = gfxCreateComputeKernel(
         gfx_, rc_program, "TraceCascades", defines.data(), (uint32_t)defines.size()); 
     rc_kernel_preavg = gfxCreateComputeKernel(gfx_, rc_program, "TraceCascadesPreAvg", defines.data(), (uint32_t)defines.size());
+    GfxDrawState resolve_draw_state;
+    gfxDrawStateSetColorTarget(resolve_draw_state, 0, capsaicin.getAOVBuffer("GlobalIllumination"));
+
+    rc_resolve_kernel =
+        gfxCreateGraphicsKernel(gfx_, rc_program, resolve_draw_state, "ResolveRCGI", defines.data(), (uint32_t)defines.size());
 
     minmax_depth_program = gfxCreateProgram(
         gfx_, "render_techniques/radiance_cascade/downsample_depth", capsaicin.getShaderPath());

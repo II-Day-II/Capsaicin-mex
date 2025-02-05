@@ -82,11 +82,13 @@ protected:
     GfxKernel     rc_kernel;
     GfxKernel     rc_kernel_preavg;
     GfxProgram    rc_program;
+    GfxKernel     rc_resolve_kernel;
 
     GfxProgram minmax_depth_program;
     GfxKernel  minmax_depth_kernel;
 
     GfxTexture rc_pingpong_textures[2];
+
 
     GfxKernel     debug_rc_kernel;
     GfxProgram    debug_rc_program;
