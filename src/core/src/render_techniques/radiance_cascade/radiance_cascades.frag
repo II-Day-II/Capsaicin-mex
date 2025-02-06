@@ -91,7 +91,7 @@ PS_OUTPUT ResolveRCGI(in float4 pos : SV_Position)
 
     // diffuse term
     //float3 irradiance = g_IrradianceBuffer[did].xyz;
-    float3 irradiance = g_IrradianceBuffer.Sample(g_TextureSampler, uv).xyz;
+    float3 irradiance = g_IrradianceBuffer.Sample(g_LinearSampler, uv).xyz;
     float3 diffuse = evaluateLambert(materialBRDF.albedo) * diffuse_compensation * irradiance;
 
     // compute specular term with split-sum approximation

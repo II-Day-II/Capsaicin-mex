@@ -16,9 +16,6 @@ RCTechnique::~RCTechnique()
 
 bool RCTechnique::init([[maybe_unused]] CapsaicinInternal const &capsaicin) noexcept
 {
-    rc_pingpong_textures[0] = gfxCreateTexture2D(gfx_, capsaicin.getWidth() / 2, capsaicin.getHeight() / 2, DXGI_FORMAT_R16G16B16A16_FLOAT);
-    rc_pingpong_textures[1] = gfxCreateTexture2D(
-        gfx_, capsaicin.getWidth() / 2, capsaicin.getHeight() / 2, DXGI_FORMAT_R16G16B16A16_FLOAT);
    
     return initKernel(capsaicin);
 }
@@ -32,8 +29,6 @@ void RCTechnique::terminate() noexcept
     gfxDestroyProgram(gfx_, minmax_depth_program);
     gfxDestroyKernel(gfx_, minmax_depth_kernel);
 
-    gfxDestroyTexture(gfx_, rc_pingpong_textures[0]);
-    gfxDestroyTexture(gfx_, rc_pingpong_textures[1]);
     if (!!debug_rc_program)
     {
         gfxDestroyProgram(gfx_, debug_rc_program);
@@ -83,7 +78,9 @@ void RCTechnique::render([[maybe_unused]] CapsaicinInternal &capsaicin) noexcept
 
     gfxProgramSetParameter(gfx_, rc_program, "g_BufferDimensions", buffer_dimensions);
     uint2 cascade_dimensions = buffer_dimensions / 2u;
-    gfxProgramSetParameter(gfx_, rc_program, "g_CascadeTexDimensions", cascade_dimensions); // TODO: use this size for cascades and upscale in composition pass
+    cascade_dimensions.y = capsaicin.getAOVBuffer("rc_probes0").getHeight();
+    cascade_dimensions.x = capsaicin.getAOVBuffer("rc_probes0").getWidth();
+    gfxProgramSetParameter(gfx_, rc_program, "g_CascadeTexDimensions", cascade_dimensions); 
 
     
     
@@ -95,7 +92,7 @@ void RCTechnique::render([[maybe_unused]] CapsaicinInternal &capsaicin) noexcept
 
     gfxProgramSetParameter(gfx_, rc_program, "g_NearestSampler", capsaicin.getNearestSampler());
     gfxProgramSetParameter(gfx_, rc_program, "g_LinearSampler", capsaicin.getLinearSampler());
-    gfxProgramSetParameter(gfx_, rc_program, "g_TextureSampler", capsaicin.getLinearSampler());
+    gfxProgramSetParameter(gfx_, rc_program, "g_TextureSampler", capsaicin.getLinearWrapSampler());
 
     gfxProgramSetParameter(gfx_, rc_program, "g_Depth", capsaicin.getAOVBuffer("VisibilityDepth"));
 
@@ -141,20 +138,15 @@ void RCTechnique::render([[maybe_unused]] CapsaicinInternal &capsaicin) noexcept
             bool  ping_pong   = cascade_level % 2 == 0;
             gfxProgramSetParameter(gfx_, rc_program, "g_cascadeId", cascade_level);
         
-        
-            //gfxProgramSetParameter(gfx_, rc_program, "g_lastCascade", rc_pingpong_textures[ping_pong ? 0 : 1]);
-            //gfxProgramSetParameter(gfx_, rc_program, "o_currentCascade", rc_pingpong_textures[ping_pong ? 1 : 0]);
 
             gfxProgramSetParameter(gfx_, rc_program, "g_lastCascade", capsaicin.getAOVBuffer(ping_pong ? "rc_probes0" : "rc_probes1"));
             gfxProgramSetParameter(gfx_, rc_program, "o_currentCascade", capsaicin.getAOVBuffer(ping_pong ? "rc_probes1" : "rc_probes0"));
 
             uint32_t const *thread_nums = gfxKernelGetNumThreads(gfx_, rc_kernel);
             uint32_t        x = thread_nums[0], y = thread_nums[1];
-            //uint32_t        thread_size_x = uint32_t(glm::ceil(cascade_dimensions.x / float(x)));
-            //uint32_t        thread_size_y = uint32_t(glm::ceil(cascade_dimensions.y / float(y)));
-        
-            uint32_t        thread_size_x = uint32_t(glm::ceil(buffer_dimensions.x / float(x)));
-            uint32_t        thread_size_y = uint32_t(glm::ceil(buffer_dimensions.y / float(y)));
+            uint32_t        thread_size_x = uint32_t(glm::ceil(cascade_dimensions.x / float(x)));
+            uint32_t        thread_size_y = uint32_t(glm::ceil(cascade_dimensions.y / float(y)));
+       
 
             gfxCommandDispatch(gfx_, thread_size_x, thread_size_y, 1); 
         }
@@ -178,7 +170,7 @@ void RCTechnique::render([[maybe_unused]] CapsaicinInternal &capsaicin) noexcept
             debug_rc_kernel = gfxCreateGraphicsKernel(gfx_, debug_rc_program, drawState);
         }
         GfxCommandEvent const commandEvent(gfx_, "DrawDebugRCprobes");
-        gfxProgramSetParameter(gfx_, debug_rc_program, "g_CascadeTex", rc_pingpong_textures[0]);
+        gfxProgramSetParameter(gfx_, debug_rc_program, "g_CascadeTex", capsaicin.getAOVBuffer("rc_probes1"));
         gfxCommandBindKernel(gfx_, debug_rc_kernel);
         gfxCommandDraw(gfx_, 3);
     }
@@ -218,8 +210,8 @@ AOVList RCTechnique::getAOVs() const noexcept
     aovs.push_back({"GeometryNormal", AOV::Read});
     aovs.push_back({"Visibility", AOV::Read});
     //aovs.push_back({"rc_probes", AOV::Write, AOV::Clear, DXGI_FORMAT_R8G8B8A8_UNORM});
-    aovs.push_back({"rc_probes0", AOV::ReadWrite, AOV::Clear, DXGI_FORMAT_R16G16B16A16_FLOAT, 1, 1920, 1080});
-    aovs.push_back({"rc_probes1", AOV::ReadWrite, AOV::Clear, DXGI_FORMAT_R16G16B16A16_FLOAT, 1, 1920, 1080});
+    aovs.push_back({"rc_probes0", AOV::ReadWrite, AOV::Clear, DXGI_FORMAT_R16G16B16A16_FLOAT, 1, 1920/4, 1080/4});
+    aovs.push_back({"rc_probes1", AOV::ReadWrite, AOV::Clear, DXGI_FORMAT_R16G16B16A16_FLOAT, 1, 1920/4, 1080/4});
     aovs.push_back({"rc_MinMaxDepth", AOV::ReadWrite, AOV::Clear, DXGI_FORMAT_R32G32_FLOAT, 6, 1920, 1080});
    
     aovs.push_back({"GlobalIllumination", AOV::Write, AOV::None, DXGI_FORMAT_R16G16B16A16_FLOAT});

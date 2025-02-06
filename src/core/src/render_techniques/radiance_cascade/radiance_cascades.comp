@@ -117,12 +117,13 @@ float3 GetRayOriginDepthAware(float2 probe_uv, float3 normal, uint cascade_index
     float2 min_max_depth = g_MinMaxDepth.SampleLevel(g_NearestSampler, probe_uv, cascade_index).rg;
     float depth = min_max_depth.r;
     float4x4 transform = g_ViewProjectionInverse;
-    return offsetPosition(transformPointProjection(float3(2.0f * float2(probe_uv.x, 1.0f - probe_uv.y) - 1.0f, depth), transform), normal);
+    float3 scaled_normal = normal * 1; //10000; // wtf am i doing here (it reduces self intersections i think...)
+    return offsetPosition(transformPointProjection(float3(2.0f * float2(probe_uv.x, 1.0f - probe_uv.y) - 1.0f, depth), transform), scaled_normal);
 }
 
-float3 GetRayOrigin(float2 coord, float3 normal)
+float3 GetRayOrigin(float2 probe_uv, float3 normal)
 {
-    float4 visibility = g_VisibilityBuffer.SampleLevel(g_NearestSampler, coord / g_BufferDimensions, 0);
+    float4 visibility = g_VisibilityBuffer.SampleLevel(g_NearestSampler, probe_uv, 0);
 
     float2 barycentrics = visibility.xy;
     uint instanceID = asuint(visibility.z);
@@ -155,7 +156,7 @@ float4 GetRadiance(IntersectData idata, RayDesc ray)
         // TODO: should we even look at direct lighting here? Seems stupid
         MaterialBRDF materialBRDF = MakeMaterialBRDF(material, idata.uv);
         reflectance = evaluateBRDF(materialBRDF, idata.normal, ray.Direction, normalize(float3(1, 1, 1))); 
-        //reflectance = 0;
+        reflectance = 0;
     }
     else
     {
@@ -208,13 +209,23 @@ Texture2D g_lastCascade;
 RWTexture2D<float4> o_currentCascade;
 uint2 g_CascadeTexDimensions;
 
+// idx: [0, sample_counts.x*sample_counts.y]
+// sample_counts: sqrt(rays per pixel)
+// 
+float2 index_to_uv_offset(uint idx, uint2 sample_counts) // -> [0, 1]
+{
+    float2 sample_idx = float2(idx % sample_counts.x, idx / sample_counts.y) - 1.0 / float2(sample_counts); // [0, sample_counts]
+    return sample_idx / sample_counts;
+}
+
 [numthreads(8,8,1)]
 void TraceCascadesPreAvg(uint3 did : SV_DispatchThreadID) // should probably be using res * 0.5 to not trace 24 rays per pixel YmY
 {
     // constants for this cascade
     const float cascade_index = g_cascadeId;
     const bool is_cascade_0 = cascade_index == 0;
-    const float2 resolution = g_BufferDimensions; //g_CascadeTexDimensions;
+    //const float2 resolution = g_BufferDimensions; 
+    const float2 resolution = g_CascadeTexDimensions;
     const float2 one_over_res = 1.0 / resolution;
     const float2 probe_size = pow(2, cascade_index); // size of the probe in pixels, c0 has 1x1 pixels / probe                   // TODO: variable scaling factor for probe size per cascade
     const float2 num_probes = resolution / probe_size; // [res/2, res/4, res/8, ...] number of probes in x/y direction (unused?)
@@ -225,12 +236,13 @@ void TraceCascadesPreAvg(uint3 did : SV_DispatchThreadID) // should probably be 
     // constants for this probe
     const float2 probe_position = floor(coord / probe_size); // [0, num_probes] position of this probe in the grid of probes
     const float2 probe_center = probe_position * probe_size + 0.5; // [probe_size/2, res - probe_size/2] the texel coordinate of the center of this probe (basically just recreating coord and adding .5?)
-    const float2 probe_center_uv = probe_center * one_over_res; // [0, 1] uv coordinate of this probe's center (the difference to uv = coord/res is tiiiiiny)
+    const float2 probe_center_uv = probe_center * one_over_res; // [0, 1] uv coordinate of this probe's center (the difference to uv = coord/res is tiiiiiny but relevant)
     // constants for this pixel
     const float2 pos_in_probe = coord % probe_size; // [0, probe_size] position of this pixel in the probe
     
     // get probe normal and see if it's on a surface
     float3 probe_normal = g_GeometryNormalBuffer.SampleLevel(g_TextureSampler, probe_center_uv, 0).xyz;
+    //float3 probe_normal = g_GeometryNormalBuffer.SampleLevel(g_TextureSampler, coord * one_over_res, 0).xyz;
     const bool is_sky_pixel = dot(probe_normal, probe_normal) == 0.0;
     if (is_sky_pixel)
     {
@@ -240,13 +252,18 @@ void TraceCascadesPreAvg(uint3 did : SV_DispatchThreadID) // should probably be 
     // get ray origin for this probe // TODO: different probes on min/max of depth buffer in this probe_position
     probe_normal = 2.0 * probe_normal - 1.0; // using this to offset the position, still getting self intersections...?
     //const float3 origin = GetRayOriginDepthAware(probe_center_uv, probe_normal, g_cascadeId); 
-    const float3 origin = GetRayOrigin(probe_center, probe_normal);
+    const float3 origin = GetRayOrigin(probe_center_uv, probe_normal);
+    
+    const uint dir_count_per_pixel = 4*4; // should always be a square number i think (does it have to be an even square?)
     
     float4 t_radiance = 0;
-    for (uint d = 0; d < 4; d++) // preaverage - trace 4 rays and store average result in this pixel
+    for (uint d = 0; d < dir_count_per_pixel; d++) // preaverage - trace 4 rays and store average result in this pixel
     {
+        const uint2 dir_counts = sqrt(dir_count_per_pixel);
+        float2 dir_offset = index_to_uv_offset(d, dir_counts);
         // get a ray direction for this pixel in the probe
-        float2 uv_in_probe = (pos_in_probe + 0.5 + 0.5*(BilinearOffset(d) - 0.5)) / probe_size;
+        //float2 uv_in_probe = (pos_in_probe + 0.5 + 0.5*(BilinearOffset(d) - 0.5)) / probe_size;
+        float2 uv_in_probe = (pos_in_probe + 0.5 + dir_offset) / probe_size;
         
         
 #if SPHERE_MAP_OCTAHEDRAL
@@ -263,28 +280,33 @@ void TraceCascadesPreAvg(uint3 did : SV_DispatchThreadID) // should probably be 
         float4 curr_radiance = float4(0.0, 0.0, 0.0, 1.0);
     
 #if DEBUG_DIRECTIONS
-        radiance = float4(direction, 1.0);
+        curr_radiance = float4(direction, 1.0);
 #else
         RayDesc ray;
         ray.Direction = direction;
         ray.Origin = origin;
         ray.TMin = interval.x;
         ray.TMax = interval.y;
+        
+        // TODO: BUG: we're getting envmap data merged into final step no matter what, kinda weird...
     
         ClosestRayQuery query = TraceRay<ClosestRayQuery>(ray);
         if (query.CommittedStatus() == COMMITTED_TRIANGLE_HIT) // ray hit something
         {
             float t = query.CommittedRayT();
             HitInfo hit = GetHitInfoRtInlineCommitted(query);
-            IntersectData idata = MakeIntersectData(hit); // TODO: sample lights the correct way
-            curr_radiance.rgb = GetRadiance(idata, ray).rgb;
-            //radiance.rgb = ray.Direction;
-            curr_radiance.a = 0.0; // occluded
+            if (hit.frontFace)
+            {
+                IntersectData idata = MakeIntersectData(hit); // TODO: sample lights the correct way
+                curr_radiance.rgb = GetRadiance(idata, ray).rgb;
+                //radiance.rgb = ray.Direction;
+                curr_radiance.a = 0.0; // occluded
+            }
         }
         else if (g_cascadeId >= g_numCascades) // hit nothing, sample env. map if top cascade 
         {
             curr_radiance.rgb = g_EnvironmentBuffer.SampleLevel(g_TextureSampler, ray.Direction, 0.0).rgb * 1.0;
-            curr_radiance.a = 0;
+            //curr_radiance.a = 0;
 #if DEBUG_DISABLE_ENV_MAP
             curr_radiance.rgb = 0;
 #endif
@@ -317,7 +339,7 @@ void TraceCascadesPreAvg(uint3 did : SV_DispatchThreadID) // should probably be 
 #if BILATERAL_UPSAMPLING
                 // TODO: min/max here? currently just doing min
                 // TODO: this simply does not work.
-                float2 bilinear_uv = bilinear_texel / resolution; // surely this can't go wrong
+                float2 bilinear_uv = bilinear_texel * one_over_res; // surely this can't go wrong
                 float current_depth = LinearizeDepth(g_MinMaxDepth.SampleLevel(g_NearestSampler, probe_center_uv, g_cascadeId + 0).r);
                 //float current_depth = LinearizeDepth(g_MinMaxDepth.SampleLevel(g_NearestSampler, bilinear_uv, 0).r);
                 float upper_depth = LinearizeDepth(g_MinMaxDepth.SampleLevel(g_NearestSampler, bilinear_uv, g_cascadeId + 1).r);
@@ -341,7 +363,7 @@ void TraceCascadesPreAvg(uint3 did : SV_DispatchThreadID) // should probably be 
     } // preaveraging 
 
     // return
-    o_currentCascade[coord] = t_radiance * 0.25;
+    o_currentCascade[coord] = t_radiance / dir_count_per_pixel;
 }
 
 [numthreads(8,8,1)]
@@ -352,7 +374,8 @@ void TraceCascades(uint3 did : SV_DispatchThreadID)
     // constants for this cascade
     const float cascade_index = g_cascadeId;
     const bool is_cascade_0 = cascade_index == 0;
-    const float2 resolution = g_BufferDimensions; // g_CascadeTexDimensions;
+    //const float2 resolution = g_BufferDimensions; 
+    const float2 resolution = g_CascadeTexDimensions;
     const float2 one_over_res = 1.0 / resolution;
     const float2 probe_size = pow(2, cascade_index + 1);                     // size of the probe in pixels, c0 has 2x2 pixels / probe                   // TODO: variable scaling factor for probe size per cascade
     const float2 num_probes = resolution / probe_size;                       // [res/2, res/4, res/8, ...] number of probes in x/y direction (unused?)
@@ -377,7 +400,8 @@ void TraceCascades(uint3 did : SV_DispatchThreadID)
     }
     // get ray origin for this probe // TODO: different probes on min/max of depth buffer in this probe_position
     probe_normal = 2.0 * probe_normal - 1.0; // using this to offset the position, still getting self intersections...? Maybe they don't matter since i'm gonna average these out next pass?
-    const float3 origin = GetRayOriginDepthAware(probe_center_uv, probe_normal, g_cascadeId + 1); //GetRayOrigin(probe_center, probe_normal);
+    //const float3 origin = GetRayOriginDepthAware(probe_center_uv, probe_normal, g_cascadeId + 1); 
+    const float3 origin = GetRayOrigin(probe_center_uv, probe_normal);
     
     float4 t_radiance = 0;
     // TODO: Do I need to do preaveraging (4 rays per pixel)?
@@ -411,10 +435,13 @@ void TraceCascades(uint3 did : SV_DispatchThreadID)
     {
         float t = query.CommittedRayT();
         HitInfo hit = GetHitInfoRtInlineCommitted(query);
-        IntersectData idata = MakeIntersectData(hit); // TODO: sample lights the correct way
-        radiance.rgb = GetRadiance(idata, ray).rgb;
-        //radiance.rgb = ray.Direction;
-        radiance.a = 0.0; // occluded
+        if (hit.frontFace)
+        {
+            IntersectData idata = MakeIntersectData(hit); // TODO: sample lights the correct way
+            radiance.rgb = GetRadiance(idata, ray).rgb;
+            //radiance.rgb = ray.Direction;
+            radiance.a = 0.0; // occluded
+        }
     }
     else if (g_cascadeId >= g_numCascades) // hit nothing, sample env. map if top cascade 
     {
@@ -467,7 +494,7 @@ void TraceCascades(uint3 did : SV_DispatchThreadID)
 #if BILATERAL_UPSAMPLING
                 // TODO: min/max here? currently just doing min
                 // TODO: this simply does not work.
-                float2 bilinear_uv = bilinear_texel / resolution; // surely this can't go wrong
+                float2 bilinear_uv = bilinear_texel * one_over_res; // surely this can't go wrong
                 float current_depth = LinearizeDepth(g_MinMaxDepth.SampleLevel(g_NearestSampler, bilinear_uv, g_cascadeId + 0).r);
                 //float current_depth = LinearizeDepth(g_MinMaxDepth.SampleLevel(g_NearestSampler, bilinear_uv, 0).r);
                 float upper_depth = LinearizeDepth(g_MinMaxDepth.SampleLevel(g_NearestSampler, bilinear_uv, g_cascadeId + 1).r);
@@ -501,7 +528,7 @@ void TraceCascades(uint3 did : SV_DispatchThreadID)
                 
             float weight = weights[i];
             #if BILATERAL_UPSAMPLING
-            float2 bilinear_uv = (bilinear_idx) * upper_probe_size / resolution; // surely this can't go wrong
+            float2 bilinear_uv = (bilinear_idx) * upper_probe_size * one_over_res; // surely this can't go wrong
             float current_depth = LinearizeDepth(g_MinMaxDepth.SampleLevel(g_NearestSampler, probe_center_uv, g_cascadeId + 0).r);
             
             float upper_depth = LinearizeDepth(g_MinMaxDepth.SampleLevel(g_NearestSampler, bilinear_uv, g_cascadeId + 1).r);

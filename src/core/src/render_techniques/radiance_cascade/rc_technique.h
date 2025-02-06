@@ -87,8 +87,6 @@ protected:
     GfxProgram minmax_depth_program;
     GfxKernel  minmax_depth_kernel;
 
-    GfxTexture rc_pingpong_textures[2];
-
 
     GfxKernel     debug_rc_kernel;
     GfxProgram    debug_rc_program;
