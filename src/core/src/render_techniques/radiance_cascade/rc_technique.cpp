@@ -156,7 +156,7 @@ void RCTechnique::render([[maybe_unused]] CapsaicinInternal &capsaicin) noexcept
 
     {
         TimedSection resolve(*this, "ResolveRCGI");
-        gfxProgramSetParameter(gfx_, rc_program, "g_IrradianceBuffer", capsaicin.getAOVBuffer("rc_probes1")); // TODO: get the last one used instead of hardcoding this
+        gfxProgramSetParameter(gfx_, rc_program, "g_IrradianceBuffer", capsaicin.getAOVBuffer("rc_probes1")); // TODO: this is always going to be correct, but damn it looks hardcoded
         gfxCommandBindKernel(gfx_, rc_resolve_kernel);
         gfxCommandDraw(gfx_, 3);
     }

@@ -345,20 +345,20 @@ void TraceCascadesPreAvg(uint3 did : SV_DispatchThreadID)
                 float2 bilinear_texel = bilinear_idx * upper_probe_size + bilin_dir_coord;
                 //if (any(bilinear_texel > resolution))
                 //    continue;
-                float4 bilinear_interval = g_lastCascade.Load(int3(bilinear_texel, 0));
+                float4 bilinear_radiance = g_lastCascade.Load(int3(bilinear_texel, 0));
                 float weight = weights[i];
 #if BILATERAL_UPSAMPLING
                 // TODO: min/max here? currently just doing min
                 // TODO: this simply does not work.
                 float2 bilinear_uv = bilinear_texel * one_over_res; // surely this can't go wrong
-                float current_depth = LinearizeDepth(g_MinMaxDepth.SampleLevel(g_NearestSampler, probe_center_uv, g_cascadeId + 0).r);
-                //float current_depth = LinearizeDepth(g_MinMaxDepth.SampleLevel(g_NearestSampler, bilinear_uv, 0).r);
+                //float current_depth = LinearizeDepth(g_MinMaxDepth.SampleLevel(g_NearestSampler, probe_center_uv, g_cascadeId + 0).r);
+                float current_depth = LinearizeDepth(g_MinMaxDepth.SampleLevel(g_NearestSampler, bilinear_uv, 0).r);
                 float upper_depth = LinearizeDepth(g_MinMaxDepth.SampleLevel(g_NearestSampler, bilinear_uv, g_cascadeId + 1).r);
                 weight *= max(exp(-100 * abs(current_depth - upper_depth)), EPSILON);
                 //float2 minmax_depth = g_MinMaxDepth.SampleLevel(g_NearestSampler, bilinear_uv, g_cascadeId + 2).rg;
                 //weight *= exp(-100 * abs(LinearizeDepth(minmax_depth.r) - LinearizeDepth(minmax_depth.g)));
 #endif
-                merged_radiance += MergeInterval(curr_radiance, bilinear_interval) * weight;
+                merged_radiance += MergeInterval(curr_radiance, bilinear_radiance) * weight;
                 total_weight += weight;
             }
             //if (total_weight == 0)
