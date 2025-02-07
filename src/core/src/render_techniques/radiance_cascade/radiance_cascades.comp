@@ -65,8 +65,8 @@ float IntervalScale(uint cascade_index)
 {
     if (cascade_index == 0)
         return 0.0;
-    return pow(2.0, cascade_index);
-    return float(1u << (1u * cascade_index));
+    //return pow(2.0, cascade_index);
+    return float(1u << (2u * cascade_index)); // TODO: variable scale factor here, currently equiv. pow(4, idx)
 }
 
 // TODO: figure out how I want to structure interval lengths
@@ -214,16 +214,63 @@ uint2 g_CascadeTexDimensions;
 // 
 float2 index_to_uv_offset(uint idx, uint2 sample_counts) // -> [0, 1]
 {
-    float2 sample_idx = float2(idx % sample_counts.x, idx / sample_counts.y) - 1.0 / float2(sample_counts); // [0, sample_counts]
+    float2 sample_idx = float2(idx % sample_counts.x, idx / sample_counts.y) - 1.0 / float2(sample_counts);
     return sample_idx / sample_counts;
 }
 
+float4 TraceInterval(float2 interval, float3 origin, float3 direction, bool is_max_cascade)
+{
+    float4 curr_radiance = float4(0.0, 0.0, 0.0, 1.0);
+    
+#if DEBUG_DIRECTIONS
+        curr_radiance = float4(direction, 1.0);
+#else
+    RayDesc ray;
+    ray.Direction = direction;
+    ray.Origin = origin;
+    ray.TMin = interval.x;
+    ray.TMax = interval.y;
+        
+        // TODO: BUG: we're getting envmap data merged into final step no matter what, kinda weird...
+    
+    ClosestRayQuery query = TraceRay < ClosestRayQuery > (ray);
+    if (query.CommittedStatus() == COMMITTED_TRIANGLE_HIT) // ray hit something
+    {
+        float t = query.CommittedRayT();
+        HitInfo hit = GetHitInfoRtInlineCommitted(query);
+        if (hit.frontFace)
+        {
+            IntersectData idata = MakeIntersectData(hit); // TODO: sample lights the correct way
+            curr_radiance.rgb = GetRadiance(idata, ray).rgb;
+            //curr_radiance.rgb = ray.Direction;
+            curr_radiance.a = 0.0; // occluded
+        }
+        else
+        {
+            curr_radiance.a = 0;
+        }
+    }
+    else if (is_max_cascade) // hit nothing, sample env. map if top cascade 
+    {
+        curr_radiance.rgb = g_EnvironmentBuffer.SampleLevel(g_TextureSampler, ray.Direction, 0.0).rgb * 1.0;
+        //curr_radiance.a = 0;
+#if DEBUG_DISABLE_ENV_MAP
+        curr_radiance.rgb = 0;
+#endif
+        //radiance.rgb = float3(1, 1, 1) * 0.03;
+    }
+#endif
+    return curr_radiance;
+}
+
+// TODO: there's a lot of temporal noise and i dont know whyyyy
 [numthreads(8,8,1)]
-void TraceCascadesPreAvg(uint3 did : SV_DispatchThreadID) // should probably be using res * 0.5 to not trace 24 rays per pixel YmY
+void TraceCascadesPreAvg(uint3 did : SV_DispatchThreadID) 
 {
     // constants for this cascade
     const float cascade_index = g_cascadeId;
     const bool is_cascade_0 = cascade_index == 0;
+    const bool is_max_cascade = g_cascadeId == g_numCascades;
     //const float2 resolution = g_BufferDimensions; 
     const float2 resolution = g_CascadeTexDimensions;
     const float2 one_over_res = 1.0 / resolution;
@@ -251,7 +298,7 @@ void TraceCascadesPreAvg(uint3 did : SV_DispatchThreadID) // should probably be 
     }
     // get ray origin for this probe // TODO: different probes on min/max of depth buffer in this probe_position
     probe_normal = 2.0 * probe_normal - 1.0; // using this to offset the position, still getting self intersections...?
-    //const float3 origin = GetRayOriginDepthAware(probe_center_uv, probe_normal, g_cascadeId); 
+    //const float3 origin = GetRayOriginDepthAware(probe_center_uv, probe_normal, g_cascadeId); // this gets self intersections everywhere... very noisy
     const float3 origin = GetRayOrigin(probe_center_uv, probe_normal);
     
     const uint dir_count_per_pixel = 4*4; // should always be a square number i think (does it have to be an even square?)
@@ -267,53 +314,15 @@ void TraceCascadesPreAvg(uint3 did : SV_DispatchThreadID) // should probably be 
         
         
 #if SPHERE_MAP_OCTAHEDRAL
-        float3 direction = octahedral_unmap(uv_in_probe); // TODO: this only samples 4 points on a circle if probe_size is 4x4
+        float3 direction = octahedral_unmap(uv_in_probe);
 #else
-        float3 direction = costheta_unmap(uv_in_probe);
+        float3 direction = costheta_unmap(uv_in_probe); // TODO: this is significantly different than octahedral
 #endif
-        // TODO: we're trying to space the rays uniformly on a sphere here.
-        // Does this mean I need more probe resolution? min 4x4 for octahedral map? Is there such a thing as a tetrahedral map?
-        // How does this affect merging?
-      
+        
     
         // raytrace
-        float4 curr_radiance = float4(0.0, 0.0, 0.0, 1.0);
-    
-#if DEBUG_DIRECTIONS
-        curr_radiance = float4(direction, 1.0);
-#else
-        RayDesc ray;
-        ray.Direction = direction;
-        ray.Origin = origin;
-        ray.TMin = interval.x;
-        ray.TMax = interval.y;
-        
-        // TODO: BUG: we're getting envmap data merged into final step no matter what, kinda weird...
-    
-        ClosestRayQuery query = TraceRay<ClosestRayQuery>(ray);
-        if (query.CommittedStatus() == COMMITTED_TRIANGLE_HIT) // ray hit something
-        {
-            float t = query.CommittedRayT();
-            HitInfo hit = GetHitInfoRtInlineCommitted(query);
-            if (hit.frontFace)
-            {
-                IntersectData idata = MakeIntersectData(hit); // TODO: sample lights the correct way
-                curr_radiance.rgb = GetRadiance(idata, ray).rgb;
-                //radiance.rgb = ray.Direction;
-                curr_radiance.a = 0.0; // occluded
-            }
-        }
-        else if (g_cascadeId >= g_numCascades) // hit nothing, sample env. map if top cascade 
-        {
-            curr_radiance.rgb = g_EnvironmentBuffer.SampleLevel(g_TextureSampler, ray.Direction, 0.0).rgb * 1.0;
-            //curr_radiance.a = 0;
-#if DEBUG_DISABLE_ENV_MAP
-            curr_radiance.rgb = 0;
-#endif
-            //radiance.rgb = float3(1, 1, 1) * 0.03;
-        }
-#endif
-        if (g_cascadeId <= g_numCascades) // merging
+        float4 curr_radiance = TraceInterval(interval, origin, direction, is_max_cascade);
+        if (!is_max_cascade) // merging
         {
             uint dir_index = pos_in_probe.x + probe_size.x * pos_in_probe.y;
             uint dir_count = probe_size.x * probe_size.y;
@@ -334,6 +343,8 @@ void TraceCascadesPreAvg(uint3 did : SV_DispatchThreadID) // should probably be 
                 float2 offset = BilinearOffset(i);
                 float2 bilinear_idx = top_left_bilin_probe_coord + offset;
                 float2 bilinear_texel = bilinear_idx * upper_probe_size + bilin_dir_coord;
+                //if (any(bilinear_texel > resolution))
+                //    continue;
                 float4 bilinear_interval = g_lastCascade.Load(int3(bilinear_texel, 0));
                 float weight = weights[i];
 #if BILATERAL_UPSAMPLING
@@ -360,6 +371,10 @@ void TraceCascadesPreAvg(uint3 did : SV_DispatchThreadID) // should probably be 
                 t_radiance += merged_radiance;
             //}
         } // merging
+        else // max cascade only needs curr_radiance
+        {
+            t_radiance += curr_radiance;
+        }
     } // preaveraging 
 
     // return
@@ -374,10 +389,11 @@ void TraceCascades(uint3 did : SV_DispatchThreadID)
     // constants for this cascade
     const float cascade_index = g_cascadeId;
     const bool is_cascade_0 = cascade_index == 0;
+    const bool is_max_cascade = g_cascadeId == g_numCascades;
     //const float2 resolution = g_BufferDimensions; 
     const float2 resolution = g_CascadeTexDimensions;
     const float2 one_over_res = 1.0 / resolution;
-    const float2 probe_size = pow(2, cascade_index + 1);                     // size of the probe in pixels, c0 has 2x2 pixels / probe                   // TODO: variable scaling factor for probe size per cascade
+    const float2 probe_size = pow(2, cascade_index + 2);                     // size of the probe in pixels, c0 has 4x4 pixels / probe                   // TODO: variable scaling factor for probe size per cascade
     const float2 num_probes = resolution / probe_size;                       // [res/2, res/4, res/8, ...] number of probes in x/y direction (unused?)
     const float2 interval = GetInterval(cascade_index, g_c0_length);         // the start and end distances of this cascade's interval                   // TODO: variable base length
     
@@ -419,42 +435,9 @@ void TraceCascades(uint3 did : SV_DispatchThreadID)
       
     
     // raytrace
-    float4 radiance = float4(0.0, 0.0, 0.0, 1.0);
-    
-#if DEBUG_DIRECTIONS
-    radiance = float4(direction, 1.0);
-#else
-    RayDesc ray;
-    ray.Direction = direction;
-    ray.Origin = origin;
-    ray.TMin = interval.x;
-    ray.TMax = interval.y;
-    
-    ClosestRayQuery query = TraceRay<ClosestRayQuery>(ray);
-    if (query.CommittedStatus() == COMMITTED_TRIANGLE_HIT) // ray hit something
-    {
-        float t = query.CommittedRayT();
-        HitInfo hit = GetHitInfoRtInlineCommitted(query);
-        if (hit.frontFace)
-        {
-            IntersectData idata = MakeIntersectData(hit); // TODO: sample lights the correct way
-            radiance.rgb = GetRadiance(idata, ray).rgb;
-            //radiance.rgb = ray.Direction;
-            radiance.a = 0.0; // occluded
-        }
-    }
-    else if (g_cascadeId >= g_numCascades) // hit nothing, sample env. map if top cascade 
-    {
-        radiance.rgb = g_EnvironmentBuffer.SampleLevel(g_TextureSampler, ray.Direction, 0.0).rgb * 1.0;
-        radiance.a = 0;
-        #if DEBUG_DISABLE_ENV_MAP
-        radiance.rgb = 0;
-        #endif
-        //radiance.rgb = float3(1, 1, 1) * 0.03;
-    }
-#endif
+    float4 radiance = TraceInterval(interval, origin, direction, is_max_cascade);
 #if !DEBUG_DISABLE_MERGING
-    if (g_cascadeId <= g_numCascades)
+    if (!is_max_cascade)
     {
         // TODO: depth aware upsampling of upper cascade, requires per-probe depth (mips?)
         // TODO: figure out the cascade offsets

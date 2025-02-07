@@ -45,7 +45,7 @@ public:
         render_techniques.emplace_back(std::make_unique<RCTechnique>());
         //render_techniques.emplace_back(std::make_unique<Atmosphere>());
         render_techniques.emplace_back(std::make_unique<Skybox>());
-        render_techniques.emplace_back(std::make_unique<UpdateHistory>());
+        //render_techniques.emplace_back(std::make_unique<UpdateHistory>());
         render_techniques.emplace_back(std::make_unique<TAA>());
         render_techniques.emplace_back(std::make_unique<ToneMapping>());
 

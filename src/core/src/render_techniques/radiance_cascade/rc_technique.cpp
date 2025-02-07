@@ -118,8 +118,9 @@ void RCTechnique::render([[maybe_unused]] CapsaicinInternal &capsaicin) noexcept
 
 
     gfxProgramSetParameter(
-        gfx_, rc_program, "g_ViewProjectionInverse", capsaicin.getCameraMatrices().inv_view_projection);
+        gfx_, rc_program, "g_ViewProjectionInverse", capsaicin.getCameraMatrices(false).inv_view_projection);
     gfxProgramSetParameter(gfx_, rc_program, "g_Eye", capsaicin.getCamera().eye);
+    
 
     // the min_max depth buffer
     gfxProgramSetParameter(gfx_, rc_program, "g_MinMaxDepth", capsaicin.getAOVBuffer("rc_MinMaxDepth"));
@@ -256,9 +257,7 @@ bool RCTechnique::initKernel(CapsaicinInternal const& capsaicin) noexcept
     minmax_depth_kernel =
         gfxCreateComputeKernel(gfx_, minmax_depth_program, "MinMaxDepth", defines.data(), (uint32_t)defines.size());
 
-    //rc_intermediate_kernel = gfxCreateComputeKernel(gfx_, rc_program, "MergeCascades", defines.data(), (uint32_t)defines.size());
-
-    //rc_finalize_kernel = gfxCreateComputeKernel(gfx_, rc_program, "AintNoWayINeedAnotherPass", defines.data(), (uint32_t)defines.size());
+    
     return !!rc_program;
 }
 
