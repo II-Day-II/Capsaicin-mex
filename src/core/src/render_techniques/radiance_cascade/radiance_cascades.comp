@@ -200,10 +200,10 @@ float3 costheta_unmap(float2 uv)
 #define DEBUG_DISABLE_MERGING 0
 #define DEBUG_DISABLE_ENV_MAP 0
 #define BILATERAL_UPSAMPLING 1
-#define MERGE_DIR_FIRST 0 // doesn't matter for bilinear, but bilateral has an effect here
+#define MERGE_DIR_FIRST 0 // doesn't matter for bilinear, but bilateral has an effect here (no effect when preaveraging)
 #define SPHERE_MAP_OCTAHEDRAL 1
 
-#define EPSILON 0.0001
+#define EPSILON 0.0000
 
 Texture2D g_lastCascade;
 RWTexture2D<float4> o_currentCascade;
@@ -280,6 +280,8 @@ void TraceCascadesPreAvg(uint3 did : SV_DispatchThreadID)
     
     // constants for this invocation (dependent on dispatch id)
     const uint2 coord = did.xy;
+    if (any(coord > g_CascadeTexDimensions))
+        return;
     // constants for this probe
     const float2 probe_position = floor(coord / probe_size); // [0, num_probes] position of this probe in the grid of probes
     const float2 probe_center = probe_position * probe_size + 0.5; // [probe_size/2, res - probe_size/2] the texel coordinate of the center of this probe (basically just recreating coord and adding .5?)
@@ -319,9 +321,10 @@ void TraceCascadesPreAvg(uint3 did : SV_DispatchThreadID)
         float3 direction = costheta_unmap(uv_in_probe); // TODO: this is significantly different than octahedral
 #endif
         
-    
         // raytrace
         float4 curr_radiance = TraceInterval(interval, origin, direction, is_max_cascade);
+        
+        // merge
         if (!is_max_cascade) // merging
         {
             uint dir_index = pos_in_probe.x + probe_size.x * pos_in_probe.y;
@@ -351,9 +354,13 @@ void TraceCascadesPreAvg(uint3 did : SV_DispatchThreadID)
                 // TODO: min/max here? currently just doing min
                 // TODO: this simply does not work.
                 float2 bilinear_uv = bilinear_texel * one_over_res; // surely this can't go wrong
+                float2 upper_probe_center = bilinear_idx * upper_probe_size + upper_probe_size * 0.5;
+                float2 upper_probe_center_uv = upper_probe_center * one_over_res;
                 //float current_depth = LinearizeDepth(g_MinMaxDepth.SampleLevel(g_NearestSampler, probe_center_uv, g_cascadeId + 0).r);
-                float current_depth = LinearizeDepth(g_MinMaxDepth.SampleLevel(g_NearestSampler, bilinear_uv, 0).r);
-                float upper_depth = LinearizeDepth(g_MinMaxDepth.SampleLevel(g_NearestSampler, bilinear_uv, g_cascadeId + 1).r);
+                float current_depth = (g_MinMaxDepth.SampleLevel(g_NearestSampler, probe_center_uv, 0).r);
+                //float current_depth = LinearizeDepth(g_MinMaxDepth.SampleLevel(g_NearestSampler, bilinear_uv, 0).r);
+                //float upper_depth = LinearizeDepth(g_MinMaxDepth.SampleLevel(g_NearestSampler, bilinear_uv, g_cascadeId + 1).r);
+                float upper_depth = (g_MinMaxDepth.SampleLevel(g_NearestSampler, upper_probe_center_uv, 0).r);
                 weight *= max(exp(-100 * abs(current_depth - upper_depth)), EPSILON);
                 //float2 minmax_depth = g_MinMaxDepth.SampleLevel(g_NearestSampler, bilinear_uv, g_cascadeId + 2).rg;
                 //weight *= exp(-100 * abs(LinearizeDepth(minmax_depth.r) - LinearizeDepth(minmax_depth.g)));

@@ -47,7 +47,7 @@ struct PS_OUTPUT
 PS_OUTPUT ResolveRCGI(in float4 pos : SV_Position)
 {
     uint2 did = uint2(pos.xy);
-
+    
     float depth = g_DepthBuffer.Load(int3(did, 0)).x;
     float3 normal = normalize(2.0f * g_ShadingNormalBuffer.Load(int3(did, 0)).xyz - 1.0f);
 

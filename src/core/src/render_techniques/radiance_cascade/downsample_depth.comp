@@ -4,12 +4,10 @@ uint g_mip_level;
 RWTexture2D<float2> o_MinMaxDepth; // the texture we're writing to
 
 
-
-// TODO: this is WAY too slow
 [numthreads(8,8,1)]
 void MinMaxDepth(uint3 did : SV_DispatchThreadID)
 {
-    uint2 coord = did.xy; // TODO: work out coord range per mip math
+    uint2 coord = did.xy; 
     uint2 probe_size = pow(2, g_mip_level);
     uint2 read_coord = coord * probe_size;
     float orig_depth = g_Depth.Load(int3(read_coord, 0)).r;

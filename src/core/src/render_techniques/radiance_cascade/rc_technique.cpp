@@ -50,6 +50,7 @@ void RCTechnique::render([[maybe_unused]] CapsaicinInternal &capsaicin) noexcept
         initKernel(capsaicin);
     }
 
+
     auto brdf_lut = capsaicin.getComponent<BrdfLut>();
 
     uint2 buffer_dimensions = uint2(capsaicin.getWidth(), capsaicin.getHeight());
@@ -133,27 +134,25 @@ void RCTechnique::render([[maybe_unused]] CapsaicinInternal &capsaicin) noexcept
         gfxProgramSetParameter(gfx_, rc_program, "g_near", near_z);
         gfxProgramSetParameter(gfx_, rc_program, "g_far", far_z);
 
+        uint32_t const *thread_nums = gfxKernelGetNumThreads(gfx_, rc_kernel);
+        uint32_t        x = thread_nums[0], y = thread_nums[1];
+        uint32_t        thread_size_x = uint32_t(glm::ceil(cascade_dimensions.x / float(x)));
+        uint32_t        thread_size_y = uint32_t(glm::ceil(cascade_dimensions.y / float(y)));
+
         TimedSection rc_probes(*this, "render_cascades");
+
         for (int cascade_level = cascade_count; cascade_level >= 0; cascade_level -= 1)
         {
-            bool  ping_pong   = cascade_level % 2 == 0;
             gfxProgramSetParameter(gfx_, rc_program, "g_cascadeId", cascade_level);
-        
-
+            bool  ping_pong   = cascade_level % 2 == 0;
             gfxProgramSetParameter(gfx_, rc_program, "g_lastCascade", capsaicin.getAOVBuffer(ping_pong ? "rc_probes0" : "rc_probes1"));
             gfxProgramSetParameter(gfx_, rc_program, "o_currentCascade", capsaicin.getAOVBuffer(ping_pong ? "rc_probes1" : "rc_probes0"));
-
-            uint32_t const *thread_nums = gfxKernelGetNumThreads(gfx_, rc_kernel);
-            uint32_t        x = thread_nums[0], y = thread_nums[1];
-            uint32_t        thread_size_x = uint32_t(glm::ceil(cascade_dimensions.x / float(x)));
-            uint32_t        thread_size_y = uint32_t(glm::ceil(cascade_dimensions.y / float(y)));
-       
 
             gfxCommandDispatch(gfx_, thread_size_x, thread_size_y, 1); 
         }
 
     }
-
+    // something happens to the aov here ???
     {
         TimedSection resolve(*this, "ResolveRCGI");
         gfxProgramSetParameter(gfx_, rc_program, "g_IrradianceBuffer", capsaicin.getAOVBuffer("rc_probes1")); // TODO: this is always going to be correct, but damn it looks hardcoded
