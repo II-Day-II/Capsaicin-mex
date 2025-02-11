@@ -129,6 +129,8 @@ void RCTechnique::render([[maybe_unused]] CapsaicinInternal &capsaicin) noexcept
     gfxCommandBindKernel(gfx_, options.rc_do_preaveraging ? rc_kernel_preavg : rc_kernel);
 
     {
+        TimedSection rc_probes(*this, "render_cascades");
+
         float far_z = capsaicin.getCamera().farZ;
         float near_z = capsaicin.getCamera().nearZ;
         gfxProgramSetParameter(gfx_, rc_program, "g_near", near_z);
@@ -138,8 +140,6 @@ void RCTechnique::render([[maybe_unused]] CapsaicinInternal &capsaicin) noexcept
         uint32_t        x = thread_nums[0], y = thread_nums[1];
         uint32_t        thread_size_x = uint32_t(glm::ceil(cascade_dimensions.x / float(x)));
         uint32_t        thread_size_y = uint32_t(glm::ceil(cascade_dimensions.y / float(y)));
-
-        TimedSection rc_probes(*this, "render_cascades");
 
         for (int cascade_level = cascade_count; cascade_level >= 0; cascade_level -= 1)
         {
@@ -152,7 +152,7 @@ void RCTechnique::render([[maybe_unused]] CapsaicinInternal &capsaicin) noexcept
         }
 
     }
-    // something happens to the aov here ???
+    // something happens to the aov here ??? incorrect sync??? gfxPlease????
     {
         TimedSection resolve(*this, "ResolveRCGI");
         gfxProgramSetParameter(gfx_, rc_program, "g_IrradianceBuffer", capsaicin.getAOVBuffer("rc_probes1")); // TODO: this is always going to be correct, but damn it looks hardcoded
@@ -210,8 +210,8 @@ AOVList RCTechnique::getAOVs() const noexcept
     aovs.push_back({"GeometryNormal", AOV::Read});
     aovs.push_back({"Visibility", AOV::Read});
     //aovs.push_back({"rc_probes", AOV::Write, AOV::Clear, DXGI_FORMAT_R8G8B8A8_UNORM});
-    aovs.push_back({"rc_probes0", AOV::ReadWrite, AOV::Clear, DXGI_FORMAT_R16G16B16A16_FLOAT, 1, 1920/4, 1080/4});
-    aovs.push_back({"rc_probes1", AOV::ReadWrite, AOV::Clear, DXGI_FORMAT_R16G16B16A16_FLOAT, 1, 1920/4, 1080/4});
+    aovs.push_back({"rc_probes0", AOV::ReadWrite, AOV::Clear, DXGI_FORMAT_R16G16B16A16_FLOAT, 1, 1920/1, 1080/1});
+    aovs.push_back({"rc_probes1", AOV::ReadWrite, AOV::Clear, DXGI_FORMAT_R16G16B16A16_FLOAT, 1, 1920/1, 1080/1});
     aovs.push_back({"rc_MinMaxDepth", AOV::ReadWrite, AOV::Clear, DXGI_FORMAT_R32G32_FLOAT, 6, 1920, 1080});
    
     aovs.push_back({"GlobalIllumination", AOV::Write, AOV::None, DXGI_FORMAT_R16G16B16A16_FLOAT});
