@@ -52,9 +52,15 @@ float LinearizeDepth(float depth)
     const float far = g_far; 
     float ndcz = 2.0 * depth - 1.0;
     return (2.0 * near * far) / (far + near - ndcz * (far - near));
-    return depth;
 }
 
+float2 LinearizeDepth(float2 depth)
+{
+    const float near = g_near;
+    const float far = g_far;
+    float2 ndcz = 2.0 * depth - 1.0;
+    return (2.0 * near * far) / (far + near - ndcz * (far - near));
+}
 
 float3 GetProbeNormal(uint2 coord)
 {
@@ -83,12 +89,14 @@ float4 MergeInterval(float4 near, float4 far)
 
 float4 BilinearWeights(float2 ratio)
 {
-    return float4(
-          (1.0 - ratio.x) * (1.0 - ratio.y)
-        , ratio.x * (1.0 - ratio.y)
-        , (1.0 - ratio.x) * ratio.y
-        , ratio.x * ratio.y
-    );
+    float4 bw = float4(ratio, 1.0 - ratio);
+    return bw.zxzx * bw.wwyy;
+    //return float4(
+    //      (1.0 - ratio.x) * (1.0 - ratio.y)
+    //    , ratio.x * (1.0 - ratio.y)
+    //    , (1.0 - ratio.x) * ratio.y
+    //    , ratio.x * ratio.y
+    //);
 }
 
 /*
@@ -212,10 +220,11 @@ uint2 g_CascadeTexDimensions;
 // idx: [0, sample_counts.x*sample_counts.y]
 // sample_counts: sqrt(rays per pixel)
 // 
-float2 index_to_uv_offset(uint idx, uint2 sample_counts) // -> [0, 1]
+float2 index_to_uv_offset(uint idx, uint2 sample_counts) 
 {
-    float2 sample_idx = float2(idx % sample_counts.x, idx / sample_counts.y) - 1.0 / float2(sample_counts);
-    return sample_idx / sample_counts;
+    float2 sample_idx = float2(idx % sample_counts.x, idx / sample_counts.y) + 0.5; // [0.5,sample_counts-0.5] eg [0.5, 3.5] for sc=4,4
+    sample_idx = sample_idx - 0.5 * float2(sample_counts); // [-sample_counts/2+0.5, sample_count/2-0.5] eg [-1.5,1.5] for sc=4,4
+    return sample_idx / sample_counts; //[-0.5+0.5/sample_counts, 0.5-0.5/sample_counts] eg [-3/8, 3/8] for sc=4,4
 }
 
 float4 TraceInterval(float2 interval, float3 origin, float3 direction, bool is_max_cascade)
@@ -263,6 +272,12 @@ float4 TraceInterval(float2 interval, float3 origin, float3 direction, bool is_m
     return curr_radiance;
 }
 
+float4 GetUpperRadiance(uint2 coord, uint cascade_id, float dst_probe_depth)
+{
+    
+    return 0;
+}
+
 // TODO: there's a lot of temporal noise and i dont know whyyyy
 [numthreads(8,8,1)]
 void TraceCascadesPreAvg(uint3 did : SV_DispatchThreadID) 
@@ -303,12 +318,14 @@ void TraceCascadesPreAvg(uint3 did : SV_DispatchThreadID)
     //const float3 origin = GetRayOriginDepthAware(probe_center_uv, probe_normal, g_cascadeId); // this gets self intersections everywhere... very noisy
     const float3 origin = GetRayOrigin(probe_center_uv, probe_normal);
     
-    const uint dir_count_per_pixel = 4*4; // should always be a square number i think (does it have to be an even square?)
+    //const uint dir_count_per_pixel = 4*4; // should always be a square number i think (does it have to be an even square?)
+    const uint2 dir_counts = uint2(4, 4);
+    const uint dir_count_per_pixel = dir_counts.x * dir_counts.y;
     
     float4 t_radiance = 0;
     for (uint d = 0; d < dir_count_per_pixel; d++) // preaverage - trace 4 rays and store average result in this pixel
     {
-        const uint2 dir_counts = sqrt(dir_count_per_pixel);
+        //const uint2 dir_counts = sqrt(dir_count_per_pixel);
         float2 dir_offset = index_to_uv_offset(d, dir_counts);
         // get a ray direction for this pixel in the probe
         //float2 uv_in_probe = (pos_in_probe + 0.5 + 0.5*(BilinearOffset(d) - 0.5)) / probe_size;
@@ -329,7 +346,7 @@ void TraceCascadesPreAvg(uint3 did : SV_DispatchThreadID)
         {
             uint dir_index = pos_in_probe.x + probe_size.x * pos_in_probe.y;
             uint dir_count = probe_size.x * probe_size.y;
-            uint base_dir_index = dir_index * 4;
+            uint base_dir_index = dir_index * dir_count_per_pixel;
             
             float2 upper_probe_size = 2 * probe_size;
             uint upper_dir_index = base_dir_index + d;
@@ -519,9 +536,11 @@ void TraceCascades(uint3 did : SV_DispatchThreadID)
             float weight = weights[i];
             #if BILATERAL_UPSAMPLING
             float2 bilinear_uv = (bilinear_idx) * upper_probe_size * one_over_res; // surely this can't go wrong
-            float current_depth = LinearizeDepth(g_MinMaxDepth.SampleLevel(g_NearestSampler, probe_center_uv, g_cascadeId + 0).r);
+            //float current_depth = LinearizeDepth(g_MinMaxDepth.SampleLevel(g_NearestSampler, probe_center_uv, g_cascadeId + 0).r);
+            float current_depth = (g_MinMaxDepth.SampleLevel(g_NearestSampler, probe_center_uv, g_cascadeId + 0).r);
             
-            float upper_depth = LinearizeDepth(g_MinMaxDepth.SampleLevel(g_NearestSampler, bilinear_uv, g_cascadeId + 1).r);
+            //float upper_depth = LinearizeDepth(g_MinMaxDepth.SampleLevel(g_NearestSampler, bilinear_uv, g_cascadeId + 1).r);
+            float upper_depth = (g_MinMaxDepth.SampleLevel(g_NearestSampler, bilinear_uv, g_cascadeId + 1).r);
             
             weight *= max(exp(-100 * abs(current_depth - upper_depth)), EPSILON);
             #endif
