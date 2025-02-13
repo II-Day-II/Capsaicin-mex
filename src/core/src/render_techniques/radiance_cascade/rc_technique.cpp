@@ -56,9 +56,9 @@ void RCTechnique::render([[maybe_unused]] CapsaicinInternal &capsaicin) noexcept
     uint2 buffer_dimensions = uint2(capsaicin.getWidth(), capsaicin.getHeight());
 
     // TODO: move these things to render settings so ui can change them
-    uint cascade_count = 5;
+    uint cascade_count = capsaicin.getOption<int>("rc_cascade_count");
     gfxProgramSetParameter(gfx_, rc_program, "g_numCascades", cascade_count);
-    float c0_length = 0.01f;
+    float c0_length = capsaicin.getOption<float>("rc_c0_length");
     gfxProgramSetParameter(gfx_, rc_program, "g_c0_length", c0_length);
     
     // get min/max depths
@@ -181,7 +181,7 @@ RenderOptionList RCTechnique::getRenderOptions() noexcept
 {
     RenderOptionList newOptions;
     newOptions.emplace(RENDER_OPTION_MAKE(rc_cascade_count, options));
-    newOptions.emplace(RENDER_OPTION_MAKE(rc_debug_cascade_stop, options));
+    newOptions.emplace(RENDER_OPTION_MAKE(rc_c0_length, options));
     newOptions.emplace(RENDER_OPTION_MAKE(rc_do_preaveraging, options));
     return newOptions;
 }
@@ -191,7 +191,7 @@ RCTechnique::RenderOptions RCTechnique::convertOptions(
 {
     RenderOptions newOptions;
     RENDER_OPTION_GET(rc_cascade_count, newOptions, options);
-    RENDER_OPTION_GET(rc_debug_cascade_stop, newOptions, options);
+    RENDER_OPTION_GET(rc_c0_length, newOptions, options);
     RENDER_OPTION_GET(rc_do_preaveraging, newOptions, options);
     return newOptions;
 }
@@ -210,7 +210,7 @@ AOVList RCTechnique::getAOVs() const noexcept
     aovs.push_back({"GeometryNormal", AOV::Read});
     aovs.push_back({"Visibility", AOV::Read});
     //aovs.push_back({"rc_probes", AOV::Write, AOV::Clear, DXGI_FORMAT_R8G8B8A8_UNORM});
-    aovs.push_back({"rc_probes0", AOV::ReadWrite, AOV::Clear, DXGI_FORMAT_R16G16B16A16_FLOAT, 1, 1920/1, 1080/1});
+    aovs.push_back({"rc_probes0", AOV::ReadWrite, AOV::Clear, DXGI_FORMAT_R16G16B16A16_FLOAT, 1, 1920/1, 1080/1}); // TODO: runtime variable resolution?
     aovs.push_back({"rc_probes1", AOV::ReadWrite, AOV::Clear, DXGI_FORMAT_R16G16B16A16_FLOAT, 1, 1920/1, 1080/1});
     aovs.push_back({"rc_MinMaxDepth", AOV::ReadWrite, AOV::Clear, DXGI_FORMAT_R32G32_FLOAT, 6, 1920, 1080});
    
@@ -234,7 +234,10 @@ DebugViewList RCTechnique::getDebugViews() const noexcept
 
 void RCTechnique::renderGUI([[maybe_unused]] CapsaicinInternal &capsaicin) const noexcept 
 {
-
+    ImGui::SliderInt("Num cascades", &capsaicin.getOption<int>("rc_cascade_count"), 1, 5);
+    ImGui::SliderFloat(
+        "C0 ray length", &capsaicin.getOption<float>("rc_c0_length"), 0.0000001f, 1.0f, "%.7f", ImGuiSliderFlags_Logarithmic);
+    ImGui::Checkbox("Use preaveraging", &capsaicin.getOption<bool>("rc_do_preaveraging"));
 }
 
 bool RCTechnique::initKernel(CapsaicinInternal const& capsaicin) noexcept

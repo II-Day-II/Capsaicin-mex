@@ -18,9 +18,9 @@ public:
     struct RenderOptions
     {
         // TODO: put parameters here, e.g. min/max bounds
-        uint rc_cascade_count = 5;
-        uint rc_debug_cascade_stop = 0;
-        bool rc_do_preaveraging    = false;
+        int rc_cascade_count = 5;
+        float rc_c0_length       = 0.01f;
+        bool rc_do_preaveraging    = true;
     };
 
     /**
