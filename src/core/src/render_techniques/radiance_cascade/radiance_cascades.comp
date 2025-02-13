@@ -110,7 +110,7 @@ void BilinearSamples(float2 dest_center, float2 upper_probe_size, out float4 wei
     const float2 base_coord = (dest_center / upper_probe_size) - float2(0.5, 0.5);
     const float2 ratio = frac(base_coord); // sub-bilinear probe pos
     weights = BilinearWeights(ratio);
-    base_idx = uint2(floor(base_coord)); // top left bilinear probe coordinate
+    base_idx = uint2(floor(base_coord)); // top left upper probe id in upper probe grid
 }
 
 uint2 BilinearOffset(uint i)
@@ -168,7 +168,7 @@ float4 GetRadiance(IntersectData idata, RayDesc ray)
     }
     else
     {
-        reflectance = materialBSDF.emissive;
+        reflectance = materialBSDF.emissive * 1;
     }
     return float4(reflectance, 1);
 }
@@ -250,7 +250,7 @@ float4 TraceInterval(float2 interval, float3 origin, float3 direction, bool is_m
         if (hit.frontFace)
         {
             IntersectData idata = MakeIntersectData(hit); // TODO: sample lights the correct way
-            curr_radiance.rgb = GetRadiance(idata, ray).rgb;
+            curr_radiance.rgb = GetRadiance(idata, ray).rgb * 1;
             //curr_radiance.rgb = ray.Direction;
             curr_radiance.a = 0.0; // occluded
         }
@@ -318,7 +318,7 @@ void TraceCascadesPreAvg(uint3 did : SV_DispatchThreadID)
     //const float3 origin = GetRayOriginDepthAware(probe_center_uv, probe_normal, g_cascadeId); // this gets self intersections everywhere... very noisy
     const float3 origin = GetRayOrigin(probe_center_uv, probe_normal);
     
-    //const uint dir_count_per_pixel = 4*4; // should always be a square number i think (does it have to be an even square?)
+    //const uint dir_count_per_pixel = 4*4; // should always be a square number i think (does it have to be an even square? a pow2 square?)
     const uint2 dir_counts = uint2(4, 4);
     const uint dir_count_per_pixel = dir_counts.x * dir_counts.y;
     
@@ -346,23 +346,23 @@ void TraceCascadesPreAvg(uint3 did : SV_DispatchThreadID)
         {
             uint dir_index = pos_in_probe.x + probe_size.x * pos_in_probe.y;
             uint dir_count = probe_size.x * probe_size.y;
-            uint base_dir_index = dir_index * dir_count_per_pixel;
+            uint base_dir_index = dir_index * 4; // sample 4 ray averages from upper probe (upper probe has 4x as many pixels) // TODO: variable scaling
             
-            float2 upper_probe_size = 2 * probe_size;
-            uint upper_dir_index = base_dir_index + d;
+            float2 upper_probe_size = 2 * probe_size; // TODO: variable scaling
+            uint upper_dir_index = base_dir_index + (d / (dir_count_per_pixel / 4)); // map d to 0..3 to choose corresponding ray average to merge with // TODO: variable scaling
             uint2 bilin_dir_coord = uint2(upper_dir_index % upper_probe_size.x, upper_dir_index / upper_probe_size.y);
             float4 merged_radiance = 0;
             float total_weight = 0;
             
-            uint2 top_left_bilin_probe_coord;
+            uint2 top_left_upper_probe_id;
             float4 weights;
-            BilinearSamples(probe_center, upper_probe_size, weights, top_left_bilin_probe_coord);
+            BilinearSamples(probe_center, upper_probe_size, weights, top_left_upper_probe_id);
             // bil(ateral|inear) sample the upper 4 probes
             for (uint i = 0; i < 4; i++) // for each upper probe
             {
                 float2 offset = BilinearOffset(i);
-                float2 bilinear_idx = top_left_bilin_probe_coord + offset;
-                float2 bilinear_texel = bilinear_idx * upper_probe_size + bilin_dir_coord;
+                float2 bilinear_idx = top_left_upper_probe_id + offset; // upper probe id in upper probe grid
+                float2 bilinear_texel = bilinear_idx * upper_probe_size + bilin_dir_coord; // mul with probe size to get top-left pixel of upper probe, add dir coord to find corresponding direction in upper probe
                 //if (any(bilinear_texel > resolution))
                 //    continue;
                 float4 bilinear_radiance = g_lastCascade.Load(int3(bilinear_texel, 0));

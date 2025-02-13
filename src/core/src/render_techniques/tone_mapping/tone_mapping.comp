@@ -25,7 +25,7 @@ uint2 g_BufferDimensions;
 uint  g_FrameIndex;
 float g_Exposure;
 
-Texture2D<float4> g_InputBuffer;
+RWTexture2D<float4> g_InputBuffer;
 RWTexture2D<float4> g_OutputBuffer;
 
 #include "../../components/blue_noise_sampler/blue_noise_sampler.hlsl"

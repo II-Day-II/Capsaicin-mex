@@ -58,7 +58,7 @@ void RCTechnique::render([[maybe_unused]] CapsaicinInternal &capsaicin) noexcept
     // TODO: move these things to render settings so ui can change them
     uint cascade_count = 5;
     gfxProgramSetParameter(gfx_, rc_program, "g_numCascades", cascade_count);
-    float c0_length = 0.1f;
+    float c0_length = 0.01f;
     gfxProgramSetParameter(gfx_, rc_program, "g_c0_length", c0_length);
     
     // get min/max depths
