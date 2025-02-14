@@ -1,5 +1,6 @@
 #include "rc_technique.h"
 #include "components/brdf_lut/brdf_lut.h"
+#include "components/light_sampler_grid_stream/light_sampler_grid_stream.h"
 
 #include "capsaicin_internal.h"
 
@@ -52,6 +53,7 @@ void RCTechnique::render([[maybe_unused]] CapsaicinInternal &capsaicin) noexcept
 
 
     auto brdf_lut = capsaicin.getComponent<BrdfLut>();
+    auto light_sampler = capsaicin.getComponent<LightSamplerGridStream>();
 
     uint2 buffer_dimensions = uint2(capsaicin.getWidth(), capsaicin.getHeight());
 
@@ -105,6 +107,7 @@ void RCTechnique::render([[maybe_unused]] CapsaicinInternal &capsaicin) noexcept
     gfxProgramSetParameter(gfx_, rc_program, "g_DepthBuffer", capsaicin.getAOVBuffer("VisibilityDepth"));
 
     brdf_lut->addProgramParameters(capsaicin, rc_program);
+    //light_sampler->addProgramParameters(capsaicin, rc_program);
 
     gfxProgramSetParameter(gfx_, rc_program, "g_VisibilityBuffer", capsaicin.getAOVBuffer("Visibility"));
     gfxProgramSetParameter(gfx_, rc_program, "g_IndexBuffer", capsaicin.getIndexBuffer());
@@ -200,6 +203,7 @@ ComponentList RCTechnique::getComponents() const noexcept
 {
     ComponentList components;
     components.push_back(COMPONENT_MAKE(BrdfLut));
+    components.push_back(COMPONENT_MAKE(LightSamplerGridStream));
     return components;
 }
 
