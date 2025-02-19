@@ -176,7 +176,7 @@ float4 GetRadiance(IntersectData idata, RayDesc ray)
         //float3 closest_light_dir = float3(0,0,0);
         //reflectance = evaluateBRDF(materialBRDF, idata.normal, ray.Direction, normalize(closest_light_dir)); 
         reflectance = diffuse;
-        //reflectance = 0;
+        reflectance = 0;
     }
     else
     {
@@ -221,7 +221,7 @@ float3 costheta_unmap(float2 uv)
 #define DEBUG_DISABLE_ENV_MAP 0
 #define BILATERAL_UPSAMPLING 1
 #define MERGE_DIR_FIRST 0 // doesn't matter for bilinear, but bilateral has an effect here (no effect when preaveraging)
-#define SPHERE_MAP_OCTAHEDRAL 1
+#define SPHERE_MAP_OCTAHEDRAL 0 // octahedral doesn't seem to get me uniform samples...
 
 #define EPSILON 0.0000
 

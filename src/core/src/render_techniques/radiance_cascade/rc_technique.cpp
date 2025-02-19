@@ -53,7 +53,7 @@ void RCTechnique::render([[maybe_unused]] CapsaicinInternal &capsaicin) noexcept
 
 
     auto brdf_lut = capsaicin.getComponent<BrdfLut>();
-    auto light_sampler = capsaicin.getComponent<LightSamplerGridStream>();
+    //auto light_sampler = capsaicin.getComponent<LightSamplerGridStream>();
 
     uint2 buffer_dimensions = uint2(capsaicin.getWidth(), capsaicin.getHeight());
 
@@ -203,7 +203,7 @@ ComponentList RCTechnique::getComponents() const noexcept
 {
     ComponentList components;
     components.push_back(COMPONENT_MAKE(BrdfLut));
-    components.push_back(COMPONENT_MAKE(LightSamplerGridStream));
+    //components.push_back(COMPONENT_MAKE(LightSamplerGridStream));
     return components;
 }
 
