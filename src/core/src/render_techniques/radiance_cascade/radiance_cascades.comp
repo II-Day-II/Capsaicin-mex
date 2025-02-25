@@ -382,6 +382,7 @@ void TraceCascadesPreAvg(uint3 did : SV_DispatchThreadID)
 #if BILATERAL_UPSAMPLING
                 // TODO: min/max here? currently just doing min
                 // TODO: this simply does not work.
+                // TODO: I think I need to linearize depth here, to deal with far geom and skybox having nearly the same depth otherwise
                 float2 bilinear_uv = bilinear_texel * one_over_res; // surely this can't go wrong
                 float2 upper_probe_center = bilinear_idx * upper_probe_size + upper_probe_size * 0.5;
                 float2 upper_probe_center_uv = upper_probe_center * one_over_res;
@@ -391,6 +392,7 @@ void TraceCascadesPreAvg(uint3 did : SV_DispatchThreadID)
                 //float upper_depth = LinearizeDepth(g_MinMaxDepth.SampleLevel(g_NearestSampler, bilinear_uv, g_cascadeId + 1).r);
                 float upper_depth = (g_MinMaxDepth.SampleLevel(g_NearestSampler, upper_probe_center_uv, 0).r);
                 weight *= max(exp(-100 * abs(current_depth - upper_depth)), EPSILON);
+                //weight *= 1.0f / (EPSILON + abs(current_depth - upper_depth));
                 //float2 minmax_depth = g_MinMaxDepth.SampleLevel(g_NearestSampler, bilinear_uv, g_cascadeId + 2).rg;
                 //weight *= exp(-100 * abs(LinearizeDepth(minmax_depth.r) - LinearizeDepth(minmax_depth.g)));
 #endif
