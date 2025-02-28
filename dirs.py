@@ -398,6 +398,11 @@ positions_str = """
 3, 3: (0.91, 0.97)
 3, 3: (0.97, 0.97)"""
 
+def costheta_unmap(uv):
+    phi = uv.x * 2 * math.pi
+    theta = uv.y * math.pi
+    return (math.sin(phi) * math.sin(theta), math.cos(phi) * math.sin(theta), math.cos(theta))
+
 pos_s = []
 for line in positions_str.split("\n"):
     if not line: continue
@@ -411,6 +416,7 @@ for line in positions_str.split("\n"):
 xs = [p[0] for _, p in pos_s]
 ys = [p[1] for _, p in pos_s]
 cols = [(c[0],c[1],0) for c, _ in pos_s]
+cols = [tuple(map(lambda x: x if x > 0 else -x, costheta_unmap(vec2(xs[i], ys[i])))) for i in range(len(xs))]
 
 plt.scatter(xs, ys, c=cols)
 plt.show()

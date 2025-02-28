@@ -158,6 +158,7 @@ void RCTechnique::render([[maybe_unused]] CapsaicinInternal &capsaicin) noexcept
     // something happens to the aov here ??? incorrect sync??? gfxPlease????
     {
         TimedSection resolve(*this, "ResolveRCGI");
+        gfxProgramSetParameter(gfx_, rc_program, "g_TextureSampler", capsaicin.getAnisotropicSampler());
         gfxProgramSetParameter(gfx_, rc_program, "g_IrradianceBuffer", capsaicin.getAOVBuffer("rc_probes1")); // TODO: this is always going to be correct, but damn it looks hardcoded
         gfxCommandBindKernel(gfx_, rc_resolve_kernel);
         gfxCommandDraw(gfx_, 3);
