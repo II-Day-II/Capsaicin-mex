@@ -73,6 +73,8 @@ float IntervalScale(uint cascade_index)
 {
     if (cascade_index == 0)
         return 0.0;
+    else if (cascade_index > g_numCascades) // the top cascade should end as far away as possible if it integrates the skybox
+        return FLT_MAX;
     //return pow(2.0, cascade_index);
     return float(1u << (2u * cascade_index)); // TODO: variable scale factor here, currently equiv. pow(4, idx)
 }
@@ -252,7 +254,7 @@ float4 TraceInterval(float2 interval, float3 origin, float3 direction, bool is_m
     ray.TMin = interval.x;
     ray.TMax = interval.y;
         
-        // TODO: BUG: we're getting envmap data merged into final step no matter what, kinda weird...
+    // TODO: BUG: we're getting envmap data merged into final step no matter what, kinda weird...
     
     ClosestRayQuery query = TraceRay < ClosestRayQuery > (ray);
     if (query.CommittedStatus() != COMMITTED_NOTHING) // ray hit something
@@ -364,7 +366,7 @@ void TraceCascadesPreAvg(uint3 did : SV_DispatchThreadID)
             //uint upper_dir_index = base_dir_index + (d / (dir_count_per_pixel / 4)); // map d to 0..3 to choose corresponding ray average to merge with // TODO: variable scaling
             // TODO: how the hell do I generalize this for ranges other than 0..16???????
             uint upper_dir_index = base_dir_index + (d / 4 + d / 2 - 3 * (d / 4 % 2) - 4 * (d / 8)); // holy fuck what is this mapping 0..16 -> 0,0,1,1,0,0,1,1,2,2,3,3,2,2,3,3
-            uint2 bilin_dir_coord = uint2(upper_dir_index % upper_probe_size.x, upper_dir_index / upper_probe_size.y);
+            uint2 bilin_dir_coord = uint2(upper_dir_index % upper_probe_size.x, upper_dir_index / upper_probe_size.x);
             float4 merged_radiance = 0;
             float total_weight = 0;
             

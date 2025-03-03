@@ -76,11 +76,14 @@ struct SceneData
 
 /** List of supported scene files and associated data */
 static vector<SceneData> const scenes = {
-    {"Flying World",    {"assets/CapsaicinTestMedia/flying_world_battle_of_the_trash_god/FlyingWorld-BattleOfTheTrashGod.gltf"},  true, 2.5f                                                                                                          },
+    {"Flying World",    {"assets/CapsaicinTestMedia/flying_world_battle_of_the_trash_god/FlyingWorld-BattleOfTheTrashGod.gltf"},  true, 2.5f},
     {"Gas Station",                                                   {"assets/CapsaicinTestMedia/gas_station/GasStation.gltf"},  true, 1.0f},
     {"Tropical Bedroom",                                    {"assets/CapsaicinTestMedia/tropical_bedroom/TropicalBedroom.gltf"},  true, 1.0f},
     {"Sponza",                                                                 {"assets/CapsaicinTestMedia/sponza/Sponza.gltf"},  true, 5.0f},
     {"Breakfast Room",                                          {"assets/CapsaicinTestMedia/breakfast_room/BreakfastRoom.gltf"},  true, 3.0f},
+    {     "Cornell Box",                                                   {"assets/LocalTests/cornell.glb"}, true, 1.0f},
+    {"Cornell Box - Sphere",                                          {"assets/LocalTests/cornell_ball.glb"}, true, 1.0f},
+    {"Cornell Box - Whitefurnace",                                          {"assets/LocalTests/cornell_whitefurnace.glb"}, true, 1.0f},
 };
 
 /** List of supported environment maps */
