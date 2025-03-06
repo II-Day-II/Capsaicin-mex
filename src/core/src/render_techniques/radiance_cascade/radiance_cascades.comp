@@ -36,6 +36,8 @@ float4x4 g_ViewProjectionInverse;
 #include "../../materials/material_sampling.hlsl"
 //#include "../../components/light_sampler_grid_stream/light_sampler_grid_stream.hlsl"
 
+#include "healpix.hlsl"
+
 Texture2D g_MinMaxDepth;
 
 // rc uniforms
@@ -224,6 +226,7 @@ float3 costheta_unmap(float2 uv)
 #define BILATERAL_UPSAMPLING 1
 #define MERGE_DIR_FIRST 0 // doesn't matter for bilinear, but bilateral has an effect here (no effect when preaveraging)
 #define SPHERE_MAP_OCTAHEDRAL 0 // octahedral doesn't seem to get me uniform samples...
+#define SPHERE_MAP_HEALPIX 0 // Healpix is also broken ;_;
 
 #define EPSILON 0.00001
 
@@ -292,6 +295,25 @@ float4 GetUpperRadiance(uint2 coord, uint cascade_id, float dst_probe_depth)
     return 0;
 }
 
+float3 index_to_direction(uint d, uint2 dir_counts, uint2 pos_in_probe, uint2 probe_size)
+{
+    //const uint2 dir_counts = sqrt(dir_count_per_pixel);
+    float2 dir_offset = index_to_uv_offset(d, dir_counts);
+    // get a ray direction for this pixel in the probe
+    //float2 uv_in_probe = (pos_in_probe + 0.5 + 0.5*(BilinearOffset(d) - 0.5)) / probe_size; // this works for d in [0,3]
+    float2 uv_in_probe = (pos_in_probe + 0.5 + dir_offset) / probe_size;
+        
+#if SPHERE_MAP_OCTAHEDRAL
+    float3 direction = octahedral_unmap(uv_in_probe); // BUG: This is incorrect, does not generate uniform directions
+#elif SPHERE_MAP_HEALPIX
+    uint nside = g_cascadeId;
+    float3 direction = healpix_index_to_direction(nside, d);
+#else
+    float3 direction = costheta_unmap(uv_in_probe); 
+#endif
+    return direction;
+}
+
 // TODO: there's a lot of temporal noise and i dont know whyyyy
 [numthreads(8,8,1)]
 void TraceCascadesPreAvg(uint3 did : SV_DispatchThreadID) 
@@ -339,18 +361,8 @@ void TraceCascadesPreAvg(uint3 did : SV_DispatchThreadID)
     float4 t_radiance = 0;
     for (uint d = 0; d < dir_count_per_pixel; d++) // preaverage - trace 4 rays and store average result in this pixel
     {
-        //const uint2 dir_counts = sqrt(dir_count_per_pixel);
-        float2 dir_offset = index_to_uv_offset(d, dir_counts);
-        // get a ray direction for this pixel in the probe
-        //float2 uv_in_probe = (pos_in_probe + 0.5 + 0.5*(BilinearOffset(d) - 0.5)) / probe_size;
-        float2 uv_in_probe = (pos_in_probe + 0.5 + dir_offset) / probe_size;
-        
-        
-#if SPHERE_MAP_OCTAHEDRAL
-        float3 direction = octahedral_unmap(uv_in_probe);
-#else
-        float3 direction = costheta_unmap(uv_in_probe); // TODO: this is significantly different than octahedral
-#endif
+
+        float3 direction = index_to_direction(d, dir_counts, pos_in_probe, probe_size);
         
         // raytrace
         float4 curr_radiance = TraceInterval(interval, origin, direction, is_max_cascade);
