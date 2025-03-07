@@ -36,7 +36,7 @@ float4x4 g_ViewProjectionInverse;
 #include "../../materials/material_sampling.hlsl"
 //#include "../../components/light_sampler_grid_stream/light_sampler_grid_stream.hlsl"
 
-#include "healpix.hlsl"
+//#include "healpix.hlsl"
 
 Texture2D g_MinMaxDepth;
 
@@ -78,13 +78,13 @@ float IntervalScale(uint cascade_index)
     else if (cascade_index > g_numCascades) // the top cascade should end as far away as possible if it integrates the skybox
         return FLT_MAX;
     //return pow(2.0, cascade_index);
-    return float(1u << (2u * cascade_index)); // TODO: variable scale factor here, currently equiv. pow(4, idx)
+    return float(1u << (1u * cascade_index)); // TODO: variable scale factor here, currently equiv. pow(4, idx)
 }
 
 // TODO: figure out how I want to structure interval lengths. They must be long enough to reach opposing walls, but short enough to not be noticeable at close distances
 float2 GetInterval(uint cascade_index, float base_length)
 {
-    return base_length * float2(IntervalScale(cascade_index), IntervalScale(cascade_index + 1));
+    return base_length * float2(IntervalScale(cascade_index), IntervalScale(cascade_index + 1) + length(pow(2.0.xx, cascade_index+1))); // a little bit of ray overlap, as a treat
 }
 
 float4 MergeInterval(float4 near, float4 far)
@@ -218,15 +218,31 @@ float3 costheta_unmap(float2 uv)
     float theta = uv.y * PI;
     return float3(float2(sin(phi), cos(phi)) * sin(theta), cos(theta));
 }
+/* Decode UV *(-1.0 -> 1.0)* coordinates into a direction. */
+inline float3 oct_decode(const float2 e)
+{
+    #define copysign(a, b) ((a) * sign(b))
+    /* Equal-Area Mapping <https://pbr-book.org/4ed/Geometry_and_Transformations/Spherical_Geometry#x3-Equal-AreaMapping> */
+    const float2 v = abs(e);
+    const float sdist = 1.0 - (v.x + v.y);
+    const float r = 1.0 - abs(sdist);
+    const float phi = ((v.y - v.x) / r + 1.0) * 0.785398;
+    const float r_sqr = r * r;
+    const float z = copysign(1.0 - r_sqr, sdist);
+    const float cos_phi = copysign(cos(phi), e.x);
+    const float sin_phi = copysign(sin(phi), e.y);
+    const float r_scl = r * sqrt(2.0 - r_sqr);
+    return float3(cos_phi * r_scl, sin_phi * r_scl, z);
+}
 /*- end direction mapping -*/
 
 #define DEBUG_DIRECTIONS 0
 #define DEBUG_DISABLE_MERGING 0
 #define DEBUG_DISABLE_ENV_MAP 0
-#define BILATERAL_UPSAMPLING 1
+#define BILATERAL_UPSAMPLING 0
 #define MERGE_DIR_FIRST 0 // doesn't matter for bilinear, but bilateral has an effect here (no effect when preaveraging)
-#define SPHERE_MAP_OCTAHEDRAL 0 // octahedral doesn't seem to get me uniform samples...
-#define SPHERE_MAP_HEALPIX 0 // Healpix is also broken ;_;
+#define SPHERE_MAP_OCTAHEDRAL 2 // 0 -> costheta, 1 -> octahedral, 2 -> octahedral (equal area)
+//#define SPHERE_MAP_HEALPIX 0 // Healpix requires a storage and merging system we do not have
 
 #define EPSILON 0.00001
 
@@ -239,7 +255,7 @@ uint2 g_CascadeTexDimensions;
 // 
 float2 index_to_uv_offset(uint idx, uint2 sample_counts) 
 {
-    float2 sample_idx = float2(idx % sample_counts.x, idx / sample_counts.y) + 0.5; // [0.5,sample_counts-0.5] eg [0.5, 3.5] for sc=4,4
+    float2 sample_idx = float2(idx % sample_counts.x, idx / sample_counts.x) + 0.5; // [0.5,sample_counts-0.5] eg [0.5, 3.5] for sc=4,4
     sample_idx = sample_idx - 0.5 * float2(sample_counts); // [-sample_counts/2+0.5, sample_count/2-0.5] eg [-1.5,1.5] for sc=4,4
     return sample_idx / sample_counts; //[-0.5+0.5/sample_counts, 0.5-0.5/sample_counts] eg [-3/8, 3/8] for sc=4,4
 }
@@ -303,10 +319,13 @@ float3 index_to_direction(uint d, uint2 dir_counts, uint2 pos_in_probe, uint2 pr
     //float2 uv_in_probe = (pos_in_probe + 0.5 + 0.5*(BilinearOffset(d) - 0.5)) / probe_size; // this works for d in [0,3]
     float2 uv_in_probe = (pos_in_probe + 0.5 + dir_offset) / probe_size;
         
-#if SPHERE_MAP_OCTAHEDRAL
+#if SPHERE_MAP_OCTAHEDRAL == 1
     float3 direction = octahedral_unmap(uv_in_probe); // BUG: This is incorrect, does not generate uniform directions
+#elif SPHERE_MAP_OCTAHEDRAL == 2
+    float3 direction = oct_decode(uv_in_probe * 2.0 - 1.0);
 #elif SPHERE_MAP_HEALPIX
-    uint nside = g_cascadeId;
+    uint nside = g_cascadeId+1;
+    uint ipix = d + (pos_in_probe.x + pos_in_probe.y * probe_size.x) * nside;
     float3 direction = healpix_index_to_direction(nside, d);
 #else
     float3 direction = costheta_unmap(uv_in_probe); 
@@ -314,10 +333,131 @@ float3 index_to_direction(uint d, uint2 dir_counts, uint2 pos_in_probe, uint2 pr
     return direction;
 }
 
-// TODO: there's a lot of temporal noise and i dont know whyyyy
+
+[numthreads(8,8,1)]
+void TraceCascadesPreAvg4(uint3 did : SV_DispatchThreadID)
+{
+    // constants for this cascade
+    const float cascade_index = g_cascadeId;
+    const bool is_cascade_0 = cascade_index == 0;
+    const bool is_max_cascade = g_cascadeId == g_numCascades;
+    //const float2 resolution = g_BufferDimensions; 
+    const float2 resolution = g_CascadeTexDimensions;
+    const float2 one_over_res = 1.0 / resolution;
+    const float2 probe_size = pow(2, cascade_index+1); // size of the probe in pixels, c0 has 2x2 pixels / probe                   // TODO: variable scaling factor for probe size per cascade
+    const float2 num_probes = resolution / probe_size; // [res/2, res/4, res/8, ...] number of probes in x/y direction (unused?)
+    const float2 interval = GetInterval(cascade_index, g_c0_length); // the start and end distances of this cascade's interval                   // TODO: variable base length
+    
+    // constants for this invocation (dependent on dispatch id)
+    const uint2 coord = did.xy;
+    if (any(coord > g_CascadeTexDimensions))
+        return;
+    // constants for this probe
+    const float2 probe_position = floor(coord / probe_size); // [0, num_probes] position of this probe in the grid of probes
+    const float2 probe_center = probe_position * probe_size + 0.5; // [probe_size/2, res - probe_size/2] the texel coordinate of the center of this probe (basically just recreating coord and adding .5?)
+    const float2 probe_center_uv = probe_center * one_over_res; // [0, 1] uv coordinate of this probe's center (the difference to uv = coord/res is tiiiiiny but relevant)
+    // constants for this pixel
+    const float2 pos_in_probe = coord % probe_size; // [0, probe_size] position of this pixel in the probe
+    
+    // get probe normal and see if it's on a surface
+    float3 probe_normal = g_GeometryNormalBuffer.SampleLevel(g_TextureSampler, probe_center_uv, 0).xyz;
+    //float3 probe_normal = g_GeometryNormalBuffer.SampleLevel(g_TextureSampler, coord * one_over_res, 0).xyz;
+    const bool is_sky_pixel = dot(probe_normal, probe_normal) == 0.0;
+    if (is_sky_pixel)
+    {
+        o_currentCascade[coord] = float4(0, 0, 0, 1);
+        return; // sky pixel does not reflect
+    }
+    // get ray origin for this probe // TODO: different probes on min/max of depth buffer in this probe_position
+    probe_normal = 2.0 * probe_normal - 1.0; // using this to offset the position, still getting self intersections...?
+    //const float3 origin = GetRayOriginDepthAware(probe_center_uv, probe_normal, g_cascadeId); // this gets self intersections everywhere... very noisy
+    const float3 origin = GetRayOrigin(probe_center_uv, probe_normal);
+    
+    //const uint dir_count_per_pixel = 4*4; // should always be a square number i think (does it have to be an even square? a pow2 square?)
+    const uint2 dir_counts = uint2(4, 4);
+    const uint dir_count_per_pixel = dir_counts.x * dir_counts.y;
+    
+    float4 t_radiance = 0;
+    // Do 4 rays this pixel
+    for (uint d = 0; d < 4; d++)
+    {
+        float3 direction = index_to_direction(d, uint2(2, 2), pos_in_probe, probe_size);
+        float4 curr_radiance = TraceInterval(interval, origin, direction, is_max_cascade);
+        if (!is_max_cascade) // merge
+        {
+            uint dir_index = pos_in_probe.x + probe_size.x * pos_in_probe.y;
+            uint dir_count = probe_size.x * probe_size.y;
+            uint base_dir_index = dir_index * 4; // sample 4 ray averages from upper probe (upper probe has 4x as many pixels) // TODO: variable scaling
+            
+            float2 upper_probe_size = 2 * probe_size; // TODO: variable scaling
+            uint upper_dir_index = base_dir_index + d; 
+            
+            uint2 bilin_dir_coord = uint2(upper_dir_index % upper_probe_size.x, upper_dir_index / upper_probe_size.x);
+            float4 merged_radiance = 0;
+            float total_weight = 0;
+            
+            uint2 top_left_upper_probe_id;
+            float4 weights;
+            BilinearSamples(probe_center, upper_probe_size, weights, top_left_upper_probe_id);
+            for (uint i = 0; i < 4; i++) // for each upper probe
+            {
+                float2 offset = BilinearOffset(i);
+                float2 bilinear_idx = top_left_upper_probe_id + offset; // upper probe id in upper probe grid
+                float2 bilinear_texel = bilinear_idx * upper_probe_size + bilin_dir_coord; // mul with probe size to get top-left pixel of upper probe, add dir coord to find corresponding direction in upper probe
+                //if (any(bilinear_texel > resolution))
+                //    continue;
+                float4 bilinear_radiance = g_lastCascade.Load(int3(bilinear_texel, 0));
+                float weight = weights[i];
+#if BILATERAL_UPSAMPLING
+                // TODO: min/max here? currently just doing min
+                // TODO: this simply does not work.
+                // TODO: I think I need to linearize depth here, to deal with far geom and skybox having nearly the same depth otherwise
+                float2 bilinear_uv = bilinear_texel * one_over_res; // surely this can't go wrong
+                float2 upper_probe_center = bilinear_idx * upper_probe_size + upper_probe_size * 0.5;
+                float2 upper_probe_center_uv = upper_probe_center * one_over_res;
+                //float current_depth = LinearizeDepth(g_MinMaxDepth.SampleLevel(g_NearestSampler, probe_center_uv, g_cascadeId + 0).r);
+                float current_depth = LinearizeDepth(g_MinMaxDepth.SampleLevel(g_NearestSampler, probe_center_uv, 0).r); // this is actual depth, not minmax
+                //float current_depth = LinearizeDepth(g_MinMaxDepth.SampleLevel(g_NearestSampler, bilinear_uv, 0).r);
+                //float upper_depth = LinearizeDepth(g_MinMaxDepth.SampleLevel(g_NearestSampler, bilinear_uv, g_cascadeId + 1).r);
+                float upper_depth = LinearizeDepth(g_MinMaxDepth.SampleLevel(g_NearestSampler, upper_probe_center_uv, 0).r); // this is actual depth, not minmax
+                if (upper_depth >= g_far)
+                    continue; // don't merge with sky pixels? (this does make a difference, but not enough)
+                weight *= max(exp(-100 * abs(current_depth - upper_depth)), EPSILON);
+                //weight *= 1.0f / (EPSILON + abs(current_depth - upper_depth));
+                //float2 minmax_depth = g_MinMaxDepth.SampleLevel(g_NearestSampler, bilinear_uv, g_cascadeId + 2).rg;
+                //weight *= exp(-100 * abs(LinearizeDepth(minmax_depth.r) - LinearizeDepth(minmax_depth.g)));
+#endif
+                merged_radiance += MergeInterval(curr_radiance, bilinear_radiance) * weight;
+                total_weight += weight;
+            }
+            if (total_weight == 0)
+            {
+                t_radiance += float4(1, 0, 1, 0); //curr_radiance;
+
+            }
+            else
+            {
+                merged_radiance /= total_weight;
+                t_radiance += merged_radiance;
+            }
+        }
+        else
+        {
+            t_radiance += curr_radiance;
+        }
+    }
+    o_currentCascade[coord] = t_radiance * 0.25;
+
+}
+
+
+
+// TODO: there's a lot of temporal noise and i dont know whyyyy ( it's maybe a sync issue)
 [numthreads(8,8,1)]
 void TraceCascadesPreAvg(uint3 did : SV_DispatchThreadID) 
 {
+    //TraceCascadesPreAvg4(did);
+    //return;
     // constants for this cascade
     const float cascade_index = g_cascadeId;
     const bool is_cascade_0 = cascade_index == 0;
@@ -436,6 +576,8 @@ void TraceCascadesPreAvg(uint3 did : SV_DispatchThreadID)
 
     // return
     o_currentCascade[coord] = t_radiance / dir_count_per_pixel;
+    //o_currentCascade[coord] = t_radiance / (t_radiance + 10.0);
+    
 }
 
 [numthreads(8,8,1)]
@@ -594,4 +736,22 @@ void TraceCascades(uint3 did : SV_DispatchThreadID)
     
     // return
     o_currentCascade[coord] = t_radiance;
+}
+
+[numthreads(8,8,1)]
+void UpscaleFinalCascade(uint3 did : SV_DispatchThreadID)
+{
+    const uint2 coord = did.xy;
+    const uint2 c0_probe_size = 2; // TODO: this requires 2x resolution for cascades
+    float4 total = 0;
+    uint2 read = coord * c0_probe_size;
+    for (uint y = 0; y < c0_probe_size.y; y++)
+    {
+        for (uint x = 0; x < c0_probe_size.x; x++)
+        {
+            uint2 pos = read + uint2(x, y);
+            total += g_lastCascade.Load(int3(pos, 0));
+        }
+    }
+    o_currentCascade[coord] = total * 0.25; // choose another name here, to signify we can't use the same texture.
 }

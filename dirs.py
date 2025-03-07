@@ -403,6 +403,32 @@ def costheta_unmap(uv):
     theta = uv.y * math.pi
     return (math.sin(phi) * math.sin(theta), math.cos(phi) * math.sin(theta), math.cos(theta))
 
+# ex, ey in [-1,1]
+def oct_decode(ex, ey):
+    vx = abs(ex); vy = abs(ey)
+    sdist = 1 - (vx + vy)
+    r = 1 - abs(sdist)
+    phi = (1 if r == 0 else (vy - vx) / r + 1) * math.pi / 4
+    r2 = r * r
+    z = math.copysign(1 - r2, sdist)
+    cosp = math.copysign(math.cos(phi), ex)
+    sinp = math.copysign(math.sin(phi), ey)
+    rscl = r * math.sqrt(2 - r2)
+    return (cosp * rscl, sinp * rscl, z)
+
+def frac(x):
+    return x - int(x)
+# ex, ey in [0,1]
+def oct_unmap(ex, ey):
+    ex = frac(ex); ey = frac(ey)
+    ex = 2 * ex - 1; ey = 2 * ey - 1
+    vx = ex; vy = ey; vz = 1 - abs(ex) - abs(ey)
+    if vz < 0:
+        vx = math.copysign(1-abs(vy), vx)
+        vy = math.copysign(1-abs(vx), vy)
+    l = math.sqrt(vx ** 2 + vy ** 2 + vz ** 2)
+    return (vx / l, vy / l, vz / l)
+
 pos_s = []
 for line in positions_str.split("\n"):
     if not line: continue
@@ -417,6 +443,10 @@ xs = [p[0] for _, p in pos_s]
 ys = [p[1] for _, p in pos_s]
 cols = [(c[0],c[1],0) for c, _ in pos_s]
 cols = [tuple(map(lambda x: x if x > 0 else -x, costheta_unmap(vec2(xs[i], ys[i])))) for i in range(len(xs))]
+cols = [tuple(map(lambda x: x if x > 0 else 0, oct_decode(xs[i] * 2 - 1, ys[i] * 2 - 1))) for i in range(len(xs))]
+cols2 = [tuple(map(lambda x: x if x > 0 else 0, oct_unmap(xs[i], ys[i]))) for i in range(len(xs))]
 
-plt.scatter(xs, ys, c=cols)
+fig, (ax1, ax2) = plt.subplots(2)
+ax1.scatter(xs, ys, c=cols)
+ax2.scatter(xs, ys, c=cols2)
 plt.show()
