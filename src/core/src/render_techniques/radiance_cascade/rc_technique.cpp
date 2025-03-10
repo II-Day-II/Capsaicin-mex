@@ -215,9 +215,9 @@ AOVList RCTechnique::getAOVs() const noexcept
     aovs.push_back({"GeometryNormal", AOV::Read});
     aovs.push_back({"Visibility", AOV::Read});
     //aovs.push_back({"rc_probes", AOV::Write, AOV::Clear, DXGI_FORMAT_R8G8B8A8_UNORM});
-    aovs.push_back({"rc_probes0", AOV::ReadWrite, AOV::Clear, DXGI_FORMAT_R16G16B16A16_FLOAT, 1, 1920/1, 1080/1}); // TODO: runtime variable resolution?
+    aovs.push_back({"rc_probes0", AOV::ReadWrite, AOV::Clear, DXGI_FORMAT_R16G16B16A16_FLOAT, 1, 1920/1, 1080/1}); // TODO: runtime variable resolution? Make these local textures instead of AOVs, they aren't shared.
     aovs.push_back({"rc_probes1", AOV::ReadWrite, AOV::Clear, DXGI_FORMAT_R16G16B16A16_FLOAT, 1, 1920/1, 1080/1});
-    aovs.push_back({"rc_MinMaxDepth", AOV::ReadWrite, AOV::Clear, DXGI_FORMAT_R32G32_FLOAT, 6, 1920, 1080});
+    aovs.push_back({"rc_MinMaxDepth", AOV::ReadWrite, AOV::Clear, DXGI_FORMAT_R32G32_FLOAT, 7, 1920, 1080});
    
     aovs.push_back({"GlobalIllumination", AOV::Write, AOV::None, DXGI_FORMAT_R16G16B16A16_FLOAT});
     /*aovs.push_back({.name = "Reflection",
@@ -239,7 +239,7 @@ DebugViewList RCTechnique::getDebugViews() const noexcept
 
 void RCTechnique::renderGUI([[maybe_unused]] CapsaicinInternal &capsaicin) const noexcept 
 {
-    ImGui::SliderInt("Num cascades", &capsaicin.getOption<int>("rc_cascade_count"), 1, 5);
+    ImGui::SliderInt("Num cascades", &capsaicin.getOption<int>("rc_cascade_count"), 0, 6);
     ImGui::SliderFloat(
         "C0 ray length", &capsaicin.getOption<float>("rc_c0_length"), 0.0000001f, 1.0f, "%.7f", ImGuiSliderFlags_Logarithmic);
     ImGui::Checkbox("Use preaveraging", &capsaicin.getOption<bool>("rc_do_preaveraging"));
