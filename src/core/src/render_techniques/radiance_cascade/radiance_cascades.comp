@@ -78,13 +78,13 @@ float IntervalScale(uint cascade_index)
     else if (cascade_index > g_numCascades) // the top cascade should end as far away as possible if it integrates the skybox
         return FLT_MAX;
     //return pow(2.0, cascade_index);
-    return float(1u << (1u * cascade_index)); // TODO: variable scale factor here, currently equiv. pow(4, idx)
+    return float(1u << (1u * cascade_index)); // TODO: variable scale factor here, currently equiv. pow(2, idx)
 }
 
 // TODO: figure out how I want to structure interval lengths. They must be long enough to reach opposing walls, but short enough to not be noticeable at close distances
 float2 GetInterval(uint cascade_index, float base_length)
 {
-    return base_length * float2(IntervalScale(cascade_index), IntervalScale(cascade_index + 1) + length(pow(2.0.xx, cascade_index+1))); // a little bit of ray overlap, as a treat
+    return base_length * float2(IntervalScale(cascade_index), IntervalScale(cascade_index + 1) + length(pow(2.0.xx, cascade_index+1))); // a little bit of interval overlap, as a treat
 }
 
 float4 MergeInterval(float4 near, float4 far)
