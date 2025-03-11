@@ -21,6 +21,7 @@ public:
         int rc_cascade_count = 5;
         float rc_c0_length       = 0.01f;
         bool rc_do_preaveraging    = true;
+        int   rc_downscale       = 0;
     };
 
     /**
@@ -77,19 +78,23 @@ public:
 protected:
 
     bool initKernel(CapsaicinInternal const &capsaicin) noexcept;
+    bool initTextures(CapsaicinInternal const &capsaicin) noexcept;
 
     RenderOptions options;
     GfxKernel     rc_kernel;
     GfxKernel     rc_kernel_preavg;
     GfxProgram    rc_program;
     GfxKernel     rc_resolve_kernel;
+    GfxTexture rc_probes[2];
 
     GfxProgram minmax_depth_program;
     GfxKernel  minmax_depth_kernel;
+    GfxTexture minmax_depth;
 
 
     GfxKernel     debug_rc_kernel;
     GfxProgram    debug_rc_program;
+
 
 };
 }

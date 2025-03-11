@@ -2398,7 +2398,7 @@ void CapsaicinInternal::setupRenderTechniques(std::string_view const &name) noex
             if (height.has_value() && width.has_value())
             {
                 texture = gfxCreateTexture2D(
-                    gfx_, width.value(), height.value(), i.second.format, mips.value_or(1));
+                    gfx_, width.value(), height.value(), i.second.format, mips.value_or(1u));
             }
             else if (mips.has_value())
             {
