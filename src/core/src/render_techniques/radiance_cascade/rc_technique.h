@@ -93,7 +93,24 @@ protected:
     GfxKernel     rc_kernel_preavg4;
     GfxKernel     rc_average_kernel;
     GfxKernel     rc_resolve_kernel;
-    GfxTexture rc_probes[2];
+
+    struct MinMaxTexture
+    {
+        GfxTexture min;
+        GfxTexture max;
+
+        void setName(char const *name)
+        {
+            // this sucks.
+            std::string maxname(name);
+            std::string minname(name); 
+            maxname += "_max";
+            minname += "_min";
+            min.setName(minname.c_str());
+            max.setName(maxname.c_str());
+        }
+    };
+    MinMaxTexture rc_probes[2];
 
     GfxProgram minmax_depth_program;
     GfxKernel  minmax_depth_kernel;
