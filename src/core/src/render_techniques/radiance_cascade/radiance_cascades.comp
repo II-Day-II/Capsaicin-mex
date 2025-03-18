@@ -443,7 +443,7 @@ void TraceCascadesPreAvg4(uint3 did : SV_DispatchThreadID)
     // get ray origin for this probe // TODO: different probes on min/max of depth buffer in this probe_position
     probe_normal = 2.0 * probe_normal - 1.0; // using this to offset the position, still getting self intersections...?
     #if PROBE_PLACEMENT == 0
-    const float3 origin = GetRayOriginDepthAware(probe_center_uv, probe_normal, g_cascadeId+1); // TODO: BUG: this gets us a bunch of stripes...?
+    const float3 origin = GetRayOriginDepthAware(probe_center_uv, probe_normal, g_cascadeId); // TODO: BUG: this gets us a bunch of stripes...? some resolution dependency with depth and probe textures, and weird self intersections.
     #elif PROBE_PLACEMENT == 1
     const float3 origin = GetRayOrigin(probe_center_uv, probe_normal);
     #endif

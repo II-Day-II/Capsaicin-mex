@@ -4,10 +4,18 @@
 
 #include "capsaicin_internal.h"
 
+#include <bit> // For std::countl_zero
+
 namespace Capsaicin
 {
 
-
+static constexpr uint nearest_pow_2(uint const n)
+{
+    constexpr uint size       = sizeof(uint) * 8;
+    uint const     next_pow_2 = (1 << (size - std::countl_zero(n)));
+    uint const     prev_pow_2 = next_pow_2 >> 1;
+    return (n - prev_pow_2) < (next_pow_2 - n) ? prev_pow_2 : next_pow_2;
+}
 
 RCTechnique::RCTechnique()
     : RenderTechnique("RC technique") 
@@ -66,8 +74,10 @@ void RCTechnique::render([[maybe_unused]] CapsaicinInternal &capsaicin) noexcept
     if (options.rc_resolution_factor != newOptions.rc_resolution_factor)
     {
         int      rf       = newOptions.rc_resolution_factor;
-        uint32_t newWidth = rf < 0 ? 2048 >> -rf : 2048 << rf;
-        uint32_t newHeight = rf < 0 ? 1024 >> -rf : 1024 << rf;
+        constexpr uint const w         = nearest_pow_2(1920);
+        constexpr uint const h         = nearest_pow_2(1080);
+        uint32_t newWidth = rf < 0 ? w >> -rf : w << rf;
+        uint32_t newHeight = rf < 0 ? h >> -rf : h << rf;
         for (uint32_t i = 0; i < 2; i++)
         {
             gfxDestroyTexture(gfx_, rc_probes[i].min);
@@ -81,11 +91,14 @@ void RCTechnique::render([[maybe_unused]] CapsaicinInternal &capsaicin) noexcept
     options                  = newOptions;
 
     // resize minmax depth if necessary
+    //if (minmax_depth.getWidth() != nearest_pow_2(capsaicin.getWidth()) || minmax_depth.getHeight() != nearest_pow_2(capsaicin.getHeight()))
     if (minmax_depth.getWidth() != capsaicin.getWidth() || minmax_depth.getHeight() != capsaicin.getHeight())
     {
         gfxDestroyTexture(gfx_, minmax_depth);
-        minmax_depth = gfxCreateTexture2D(
-            gfx_, capsaicin.getWidth(), capsaicin.getHeight(), DXGI_FORMAT_R32G32_FLOAT, 7u);
+        [[maybe_unused]]uint32_t mmdepth_width = nearest_pow_2(capsaicin.getWidth());
+        [[maybe_unused]]uint32_t mmdepth_height = nearest_pow_2(capsaicin.getHeight());
+        minmax_depth = gfxCreateTexture2D(gfx_, capsaicin.getWidth(), capsaicin.getHeight(), DXGI_FORMAT_R32G32_FLOAT, 7u);
+        //minmax_depth = gfxCreateTexture2D(gfx_, mmedpth_width, mmdepth_height, DXGI_FORMAT_R32G32_FLOAT, 7u);
         minmax_depth.setName(texNames[2]);
     }
     
@@ -106,18 +119,24 @@ void RCTechnique::render([[maybe_unused]] CapsaicinInternal &capsaicin) noexcept
     gfxProgramSetParameter(gfx_, rc_program, "g_numCascades", cascade_count);
     float c0_length = capsaicin.getOption<float>("rc_c0_length");
     gfxProgramSetParameter(gfx_, rc_program, "g_c0_length", c0_length);
-    
+
+        
     // get min/max depths
     {
         gfxCommandBindKernel(gfx_, minmax_depth_kernel);
-        gfxProgramSetParameter(gfx_, minmax_depth_program, "g_Depth", capsaicin.getAOVBuffer("VisibilityDepth"));
+        gfxProgramSetParameter(gfx_, minmax_depth_program, "g_Depth", capsaicin.getAOVBuffer("VisibilityDepth")); // TODO: this either needs to be the same size as the output or we need the shader to sample as though it were.
         TimedSection minmax_depth_timer(*this, "min_max_depth");
         for (uint i = 0; i <= cascade_count; i++)
         {
-            //gfxProgramSetParameter(gfx_, minmax_depth_program, "o_MinMaxDepth", capsaicin.getAOVBuffer("rc_MinMaxDepth"), i);
             gfxProgramSetParameter(gfx_, minmax_depth_program, "o_MinMaxDepth", minmax_depth, i);
             gfxProgramSetParameter(gfx_, minmax_depth_program, "g_mip_level", i);
-            gfxCommandDispatch(gfx_, (uint32_t)glm::ceil((buffer_dimensions.x >> i) / 8.0), (uint32_t)glm::ceil((buffer_dimensions.y >> i) / 8.0), 1);
+            uint2 dispatch_size = glm::ceil(
+                float2(
+                    minmax_depth.getWidth() >> i, 
+                    minmax_depth.getHeight() >> i
+                ) / float2(8.0f) // TODO: extract group size from kernel
+            );
+            gfxCommandDispatch(gfx_, dispatch_size.x, dispatch_size.y, 1);
         }
     }
 
@@ -289,10 +308,6 @@ AOVList RCTechnique::getAOVs() const noexcept
     aovs.push_back({"VisibilityDepth", AOV::Read});
     aovs.push_back({"GeometryNormal", AOV::Read});
     aovs.push_back({"Visibility", AOV::Read});
-    //aovs.push_back({"rc_probes", AOV::Write, AOV::Clear, DXGI_FORMAT_R8G8B8A8_UNORM});
-    //aovs.push_back({"rc_probes0", AOV::ReadWrite, AOV::Clear, DXGI_FORMAT_R16G16B16A16_FLOAT, 1, 1920/1, 1080/1}); // TODO: runtime variable resolution? Make these local textures instead of AOVs, they aren't shared.
-    //aovs.push_back({"rc_probes1", AOV::ReadWrite, AOV::Clear, DXGI_FORMAT_R16G16B16A16_FLOAT, 1, 1920/1, 1080/1});
-    //aovs.push_back({"rc_MinMaxDepth", AOV::ReadWrite, AOV::Clear, DXGI_FORMAT_R32G32_FLOAT, 7, 1920, 1080});
    
     aovs.push_back({"GlobalIllumination", AOV::Write, AOV::None, DXGI_FORMAT_R16G16B16A16_FLOAT});
     /*aovs.push_back({.name = "Reflection",
@@ -317,7 +332,7 @@ void RCTechnique::renderGUI([[maybe_unused]] CapsaicinInternal &capsaicin) const
     ImGui::SliderInt("Num cascades", &capsaicin.getOption<int>("rc_cascade_count"), 0, 6);
     ImGui::SliderFloat(
         "C0 ray length", &capsaicin.getOption<float>("rc_c0_length"), 0.0000001f, 1.0f, "%.7f", ImGuiSliderFlags_Logarithmic);
-    //ImGui::Checkbox("Use preaveraging", &capsaicin.getOption<RCTechnique::PreAvgSetup>("rc_preaveraging"));
+    
     char const *preavg_labels[] = {"OFF", "4", "16"};
     ImGui::Combo("Use Preaveraging", &capsaicin.getOption<int>("rc_preaveraging"),
         preavg_labels, RCTechnique::PreAverageSetupCount);
@@ -354,8 +369,9 @@ bool RCTechnique::initKernel(CapsaicinInternal const& capsaicin) noexcept
 
 bool RCTechnique::initTextures(CapsaicinInternal const& capsaicin) noexcept
 {
-    uint32_t probes_width = 2048 >> 0;
-    uint32_t probes_height = 1024 >> 0;
+    capsaicin;
+    constexpr uint32_t probes_width = nearest_pow_2(1920);
+    constexpr uint32_t probes_height = nearest_pow_2(1080);
     for (uint32_t i = 0; i < 2; i++)
     {
         rc_probes[i].min =
@@ -364,8 +380,10 @@ bool RCTechnique::initTextures(CapsaicinInternal const& capsaicin) noexcept
             gfxCreateTexture2D(gfx_, probes_width, probes_height, DXGI_FORMAT_R16G16B16A16_FLOAT);
         rc_probes[i].setName(texNames[i]);
     }
-    minmax_depth =
-        gfxCreateTexture2D(gfx_, capsaicin.getWidth(), capsaicin.getHeight(), DXGI_FORMAT_R32G32_FLOAT, 7);
+    [[maybe_unused]]const uint32_t mmdepth_width = nearest_pow_2(capsaicin.getWidth());
+    [[maybe_unused]]const uint32_t mmdepth_height = nearest_pow_2(capsaicin.getHeight());
+    minmax_depth = gfxCreateTexture2D(gfx_, capsaicin.getWidth(), capsaicin.getHeight(), DXGI_FORMAT_R32G32_FLOAT, 7);
+    //minmax_depth = gfxCreateTexture2D(gfx_, mmdepth_width, mmdepth_height, DXGI_FORMAT_R32G32_FLOAT, 7);
     minmax_depth.setName(texNames[2]);
 
     return !!minmax_depth && !!rc_probes[0].max;
