@@ -3,25 +3,30 @@ Texture2D g_Depth; // the full res depth texture
 uint g_mip_level;
 RWTexture2D<float2> o_MinMaxDepth; // the texture we're writing to
 
+uint2 g_dst_dimensions; // the dimensions of the target minmax depth texture's largest mip
+
 
 [numthreads(8,8,1)]
 void MinMaxDepth(uint3 did : SV_DispatchThreadID)
 {
+    uint3 src_dimensions;
+    g_Depth.GetDimensions(0, src_dimensions.x, src_dimensions.y, src_dimensions.z);
+    
+    // This "resizes" the texture while doing the depth minmaxing, from 1920x1080 -> 2048x1024, causes some stretching
+    float2 aspect_correction = float2(src_dimensions.xy) / float2(g_dst_dimensions); // TODO: BUG: causes far right to be missed sometimes
+    
     uint2 coord = did.xy; 
     uint2 probe_size = pow(2, g_mip_level);
-    uint2 read_coord = coord * probe_size;
+    float2 read_coord = aspect_correction * coord * probe_size;
     float orig_depth = g_Depth.Load(int3(read_coord, 0)).r;
     float min_depth = orig_depth, max_depth = orig_depth;
     
-    uint2 dimensions;
-    uint unused;
-    g_Depth.GetDimensions(0, dimensions.x, dimensions.y, unused);
     for (uint y = 0; y < probe_size.y; y++)
     {
         for (uint x = 0; x < probe_size.x; x++)
         {
-            uint2 pos = read_coord + uint2(x, y);
-            if (any(pos > dimensions))
+            float2 pos = read_coord + uint2(x, y);
+            if (any(pos > src_dimensions.xy))
             {
                 continue;
             }

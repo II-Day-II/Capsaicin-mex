@@ -91,14 +91,14 @@ void RCTechnique::render([[maybe_unused]] CapsaicinInternal &capsaicin) noexcept
     options                  = newOptions;
 
     // resize minmax depth if necessary
-    //if (minmax_depth.getWidth() != nearest_pow_2(capsaicin.getWidth()) || minmax_depth.getHeight() != nearest_pow_2(capsaicin.getHeight()))
-    if (minmax_depth.getWidth() != capsaicin.getWidth() || minmax_depth.getHeight() != capsaicin.getHeight())
+    if (minmax_depth.getWidth() != nearest_pow_2(capsaicin.getWidth()) || minmax_depth.getHeight() != nearest_pow_2(capsaicin.getHeight()))
+    //if (minmax_depth.getWidth() != capsaicin.getWidth() || minmax_depth.getHeight() != capsaicin.getHeight())
     {
         gfxDestroyTexture(gfx_, minmax_depth);
         [[maybe_unused]]uint32_t mmdepth_width = nearest_pow_2(capsaicin.getWidth());
         [[maybe_unused]]uint32_t mmdepth_height = nearest_pow_2(capsaicin.getHeight());
-        minmax_depth = gfxCreateTexture2D(gfx_, capsaicin.getWidth(), capsaicin.getHeight(), DXGI_FORMAT_R32G32_FLOAT, 7u);
-        //minmax_depth = gfxCreateTexture2D(gfx_, mmedpth_width, mmdepth_height, DXGI_FORMAT_R32G32_FLOAT, 7u);
+        //minmax_depth = gfxCreateTexture2D(gfx_, capsaicin.getWidth(), capsaicin.getHeight(), DXGI_FORMAT_R32G32_FLOAT, 7u);
+        minmax_depth = gfxCreateTexture2D(gfx_, mmdepth_width, mmdepth_height, DXGI_FORMAT_R32G32_FLOAT, 7u);
         minmax_depth.setName(texNames[2]);
     }
     
@@ -120,11 +120,12 @@ void RCTechnique::render([[maybe_unused]] CapsaicinInternal &capsaicin) noexcept
     float c0_length = capsaicin.getOption<float>("rc_c0_length");
     gfxProgramSetParameter(gfx_, rc_program, "g_c0_length", c0_length);
 
-        
+    
     // get min/max depths
     {
         gfxCommandBindKernel(gfx_, minmax_depth_kernel);
-        gfxProgramSetParameter(gfx_, minmax_depth_program, "g_Depth", capsaicin.getAOVBuffer("VisibilityDepth")); // TODO: this either needs to be the same size as the output or we need the shader to sample as though it were.
+        gfxProgramSetParameter(gfx_, minmax_depth_program, "g_Depth", capsaicin.getAOVBuffer("VisibilityDepth")); 
+        gfxProgramSetParameter(gfx_, minmax_depth_program, "g_dst_dimensions", uint2(minmax_depth.getWidth(), minmax_depth.getHeight()));
         TimedSection minmax_depth_timer(*this, "min_max_depth");
         for (uint i = 0; i <= cascade_count; i++)
         {
@@ -382,8 +383,8 @@ bool RCTechnique::initTextures(CapsaicinInternal const& capsaicin) noexcept
     }
     [[maybe_unused]]const uint32_t mmdepth_width = nearest_pow_2(capsaicin.getWidth());
     [[maybe_unused]]const uint32_t mmdepth_height = nearest_pow_2(capsaicin.getHeight());
-    minmax_depth = gfxCreateTexture2D(gfx_, capsaicin.getWidth(), capsaicin.getHeight(), DXGI_FORMAT_R32G32_FLOAT, 7);
-    //minmax_depth = gfxCreateTexture2D(gfx_, mmdepth_width, mmdepth_height, DXGI_FORMAT_R32G32_FLOAT, 7);
+    //minmax_depth = gfxCreateTexture2D(gfx_, capsaicin.getWidth(), capsaicin.getHeight(), DXGI_FORMAT_R32G32_FLOAT, 7);
+    minmax_depth = gfxCreateTexture2D(gfx_, mmdepth_width, mmdepth_height, DXGI_FORMAT_R32G32_FLOAT, 7);
     minmax_depth.setName(texNames[2]);
 
     return !!minmax_depth && !!rc_probes[0].max;

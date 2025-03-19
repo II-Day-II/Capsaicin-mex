@@ -242,8 +242,7 @@ inline float3 oct_decode(const float2 e)
 #define DEBUG_DISABLE_ENV_MAP 0
 #define BILATERAL_UPSAMPLING 1
 #define MERGE_DIR_FIRST 0 // doesn't matter for bilinear, but bilateral has an effect here (no effect when preaveraging)
-#define SPHERE_MAP_OCTAHEDRAL 2 // 0 -> costheta, 1 -> octahedral, 2 -> octahedral (equal area)
-//#define SPHERE_MAP_HEALPIX 0 // Healpix requires a storage and merging system we do not have
+#define SPHERE_MAP_MODE 2 // 0 -> costheta, 1 -> octahedral, 2 -> octahedral (equal area)
 #define PROBE_PLACEMENT 0 // 0 -> depth aware, 1 -> probe center
 
 #define EPSILON 0.00001
@@ -312,7 +311,7 @@ float4 TraceInterval(float2 interval, float3 origin, float3 direction, bool is_m
 void MergeUpperRadiance(inout float4 t_radiance, float4 traced_radiance, uint2 target_probe_pos, uint2 target_probe_size, uint2 pos_in_target_probe, uint target_dir_index)
 {
     uint2 upper_probe_size = 2 * target_probe_size;
-    #if 0 // this makes no difference in quality
+    #if 0 // this makes no discernable difference in quality or correctness
     uint2 nearest_upper_probe = target_probe_pos / 2; // 0,0 -> 0,0; 1,1 -> 0,0; 2,2 -> 1,1 etc. There are half as many probes in cN+1.
     uint2 pos_in_upper_probe = target_probe_pos % 2; // [0,1]
     uint2 upper_probe_tl = nearest_upper_probe - (1 - pos_in_upper_probe); 
@@ -391,9 +390,9 @@ float3 index_to_direction(uint d, uint2 dir_counts, uint2 pos_in_probe, uint2 pr
     //float2 uv_in_probe = (pos_in_probe + 0.5 + 0.5*(BilinearOffset(d) - 0.5)) / probe_size; // this works for d in [0,3]
     float2 uv_in_probe = (pos_in_probe + 0.5 + dir_offset) / probe_size;
         
-#if SPHERE_MAP_OCTAHEDRAL == 1
+#if SPHERE_MAP_MODE == 1
     float3 direction = octahedral_unmap(uv_in_probe); 
-#elif SPHERE_MAP_OCTAHEDRAL == 2
+#elif SPHERE_MAP_MODE == 2
     float3 direction = oct_decode(uv_in_probe * 2.0 - 1.0); // this is an equal-area version of the above octahedral mapping. 
 #elif SPHERE_MAP_HEALPIX
     uint nside = g_cascadeId+1;
@@ -413,10 +412,9 @@ void TraceCascadesPreAvg4(uint3 did : SV_DispatchThreadID)
     const float cascade_index = g_cascadeId;
     const bool is_cascade_0 = cascade_index == 0;
     const bool is_max_cascade = g_cascadeId == g_numCascades;
-    //const float2 resolution = g_BufferDimensions; 
     const float2 resolution = g_CascadeTexDimensions;
     const float2 one_over_res = 1.0 / resolution;
-    const float2 probe_size = pow(2, cascade_index+1); // size of the probe in pixels, c0 has 2x2 pixels / probe                   // TODO: variable scaling factor for probe size per cascade
+    const uint2 probe_size = pow(2, cascade_index+1); // size of the probe in pixels, c0 has 2x2 pixels / probe                   // TODO: variable scaling factor for probe size per cascade
     const float2 num_probes = resolution / probe_size; // [res/2, res/4, res/8, ...] number of probes in x/y direction (unused?)
     const float2 interval = GetInterval(cascade_index, g_c0_length); // the start and end distances of this cascade's interval                   // TODO: variable base length
     
@@ -425,11 +423,11 @@ void TraceCascadesPreAvg4(uint3 did : SV_DispatchThreadID)
     if (any(coord > g_CascadeTexDimensions))
         return;
     // constants for this probe
-    const float2 probe_position = floor(coord / probe_size); // [0, num_probes] position of this probe in the grid of probes
+    const uint2 probe_position = floor(coord / probe_size); // [0, num_probes] position of this probe in the grid of probes
     const float2 probe_center = (probe_position + 0.5) * probe_size; // [probe_size/2, res - probe_size/2] the texel coordinate of the center of this probe (basically just recreating coord and adding .5?)
-    const float2 probe_center_uv = probe_center * one_over_res; // [0, 1] uv coordinate of this probe's center (the difference to uv = coord/res is tiiiiiny but relevant)
+    const float2 probe_center_uv = probe_center * one_over_res; // [0, 1] uv coordinate of this probe's center 
     // constants for this pixel
-    const float2 pos_in_probe = coord % probe_size; // [0, probe_size] position of this pixel in the probe
+    const uint2 pos_in_probe = coord % probe_size; // [0, probe_size] position of this pixel in the probe
     
     // get probe normal and see if it's on a surface
     float3 probe_normal = g_GeometryNormalBuffer.SampleLevel(g_TextureSampler, probe_center_uv, 0).xyz;
@@ -443,7 +441,7 @@ void TraceCascadesPreAvg4(uint3 did : SV_DispatchThreadID)
     // get ray origin for this probe // TODO: different probes on min/max of depth buffer in this probe_position
     probe_normal = 2.0 * probe_normal - 1.0; // using this to offset the position, still getting self intersections...?
     #if PROBE_PLACEMENT == 0
-    const float3 origin = GetRayOriginDepthAware(probe_center_uv, probe_normal, g_cascadeId); // TODO: BUG: this gets us a bunch of stripes...? some resolution dependency with depth and probe textures, and weird self intersections.
+    const float3 origin = GetRayOriginDepthAware(probe_center_uv, probe_normal, g_cascadeId); // TODO: BUG: this gets us a bunch of stripes...? some resolution dependency with depth and probe textures, and weird self intersections. Depends on ray length??
     #elif PROBE_PLACEMENT == 1
     const float3 origin = GetRayOrigin(probe_center_uv, probe_normal);
     #endif
@@ -455,11 +453,15 @@ void TraceCascadesPreAvg4(uint3 did : SV_DispatchThreadID)
     {
         float3 direction = index_to_direction(d, uint2(2, 2), pos_in_probe, probe_size);
         float4 curr_radiance = TraceInterval(interval, origin, direction, is_max_cascade);
+        #if !DEBUG_DISABLE_MERGING
         if (!is_max_cascade) // merge
         {
             MergeUpperRadiance(t_radiance, curr_radiance, probe_position, probe_size, pos_in_probe, d);
         }
         else
+        #else
+        t_radiance += g_lastCascade_min[coord];
+        #endif
         {
             t_radiance += curr_radiance;
         }
@@ -482,7 +484,7 @@ void TraceCascadesPreAvg16(uint3 did : SV_DispatchThreadID)
     //const float2 resolution = g_BufferDimensions; 
     const float2 resolution = g_CascadeTexDimensions;
     const float2 one_over_res = 1.0 / resolution;
-    const float2 probe_size = pow(2, cascade_index); // size of the probe in pixels, c0 has 1x1 pixels / probe                   // TODO: variable scaling factor for probe size per cascade
+    const uint2 probe_size = pow(2, cascade_index); // size of the probe in pixels, c0 has 1x1 pixels / probe                   // TODO: variable scaling factor for probe size per cascade
     const float2 num_probes = resolution / probe_size; // [res/2, res/4, res/8, ...] number of probes in x/y direction (unused?)
     const float2 interval = GetInterval(cascade_index, g_c0_length); // the start and end distances of this cascade's interval                   // TODO: variable base length
     
@@ -491,11 +493,11 @@ void TraceCascadesPreAvg16(uint3 did : SV_DispatchThreadID)
     if (any(coord > g_CascadeTexDimensions))
         return;
     // constants for this probe
-    const float2 probe_position = floor(coord / probe_size); // [0, num_probes] position of this probe in the grid of probes
+    const uint2 probe_position = floor(coord / probe_size); // [0, num_probes] position of this probe in the grid of probes
     const float2 probe_center = (probe_position + 0.5) * probe_size; // [probe_size/2, res - probe_size/2] the texel coordinate of the center of this probe (basically just recreating coord and adding .5?)
-    const float2 probe_center_uv = probe_center * one_over_res; // [0, 1] uv coordinate of this probe's center (the difference to uv = coord/res is tiiiiiny but relevant)
+    const float2 probe_center_uv = probe_center * one_over_res; // [0, 1] uv coordinate of this probe's center 
     // constants for this pixel
-    const float2 pos_in_probe = coord % probe_size; // [0, probe_size] position of this pixel in the probe
+    const uint2 pos_in_probe = coord % probe_size; // [0, probe_size] position of this pixel in the probe
     
     // get probe normal and see if it's on a surface
     float3 probe_normal = g_GeometryNormalBuffer.SampleLevel(g_TextureSampler, probe_center_uv, 0).xyz;
@@ -509,7 +511,7 @@ void TraceCascadesPreAvg16(uint3 did : SV_DispatchThreadID)
     // get ray origin for this probe // TODO: different probes on min/max of depth buffer in this probe_position
     probe_normal = 2.0 * probe_normal - 1.0; // using this to offset the position, still getting self intersections...?
     #if PROBE_PLACEMENT == 0
-    const float3 origin = GetRayOriginDepthAware(probe_center_uv, probe_normal, g_cascadeId); // this gets self intersections everywhere... very noisy
+    const float3 origin = GetRayOriginDepthAware(probe_center_uv, probe_normal, g_cascadeId); // BUG: this gets wacky stripes everywhere, dependent on ray length...?
     #elif PROBE_PLACEMENT == 1
     const float3 origin = GetRayOrigin(probe_center_uv, probe_normal);
     #endif
@@ -527,6 +529,7 @@ void TraceCascadesPreAvg16(uint3 did : SV_DispatchThreadID)
         // raytrace
         float4 curr_radiance = TraceInterval(interval, origin, direction, is_max_cascade);
         
+        #if !DEBUG_DISABLE_MERGING
         // merge
         if (!is_max_cascade) // merging
         {
@@ -537,6 +540,9 @@ void TraceCascadesPreAvg16(uint3 did : SV_DispatchThreadID)
 
         } // merging
         else // max cascade only needs curr_radiance
+        #else
+        t_radiance += g_lastCascade_min[coord];
+        #endif
         {
             t_radiance += curr_radiance;
         }
@@ -590,10 +596,12 @@ void TraceCascades(uint3 did : SV_DispatchThreadID)
 
     // get a ray direction for this pixel in the probe
     const float2 uv_in_probe = (pos_in_probe + 0.5) / probe_size;
-    #if SPHERE_MAP_OCTAHEDRAL
+    #if SPHERE_MAP_MODE == 1
     float3 direction = octahedral_unmap(uv_in_probe); // TODO: this only samples 4 points on a circle if probe_size is 2x2
-    #else
+    #elif SPHERE_MAP_MODE == 0
     float3 direction = costheta_unmap(uv_in_probe);
+    #elif SPHERE_MAP_MODE == 2
+    float3 direction = oct_decode(uv_in_probe * 2.0 - 1.0);
     #endif
     
     //o_currentCascade_min[coord] = float4(direction, 1.0);
