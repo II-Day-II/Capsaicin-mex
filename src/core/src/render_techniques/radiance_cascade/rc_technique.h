@@ -28,6 +28,7 @@ public:
         float rc_c0_length       = 0.01f;
         int rc_preaveraging      = PreAvgSetup::PreAverage16;
         int   rc_resolution_factor       = 0;
+        bool  rc_single_cascade_only = false;
     };
 
     /**

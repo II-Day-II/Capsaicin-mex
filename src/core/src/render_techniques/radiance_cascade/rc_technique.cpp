@@ -41,11 +41,10 @@ void RCTechnique::terminate() noexcept
     gfxDestroyProgram(gfx_, minmax_depth_program);
     gfxDestroyKernel(gfx_, minmax_depth_kernel);
 
-    if (!!debug_rc_program)
-    {
-        gfxDestroyProgram(gfx_, debug_rc_program);
-        gfxDestroyKernel(gfx_, debug_rc_kernel);
-    }
+#ifdef _DEBUG
+    gfxDestroyProgram(gfx_, debug_rc_program);
+    gfxDestroyKernel(gfx_, debug_rc_kernel);
+#endif
 
     gfxDestroyTexture(gfx_, rc_probes[0].min);
     gfxDestroyTexture(gfx_, rc_probes[1].min);
@@ -88,20 +87,22 @@ void RCTechnique::render([[maybe_unused]] CapsaicinInternal &capsaicin) noexcept
         }
     }
 
-    options                  = newOptions;
 
     // resize minmax depth if necessary
-    if (minmax_depth.getWidth() != nearest_pow_2(capsaicin.getWidth()) || minmax_depth.getHeight() != nearest_pow_2(capsaicin.getHeight()))
-    //if (minmax_depth.getWidth() != capsaicin.getWidth() || minmax_depth.getHeight() != capsaicin.getHeight())
+    //if (minmax_depth.getWidth() != nearest_pow_2(capsaicin.getWidth()) || minmax_depth.getHeight() != nearest_pow_2(capsaicin.getHeight()))
+    if (minmax_depth.getWidth() != rc_probes[0].min.getWidth() || minmax_depth.getHeight() != rc_probes[0].min.getHeight() || options.rc_cascade_count != newOptions.rc_cascade_count)
     {
         gfxDestroyTexture(gfx_, minmax_depth);
         [[maybe_unused]]uint32_t mmdepth_width = nearest_pow_2(capsaicin.getWidth());
         [[maybe_unused]]uint32_t mmdepth_height = nearest_pow_2(capsaicin.getHeight());
-        //minmax_depth = gfxCreateTexture2D(gfx_, capsaicin.getWidth(), capsaicin.getHeight(), DXGI_FORMAT_R32G32_FLOAT, 7u);
-        minmax_depth = gfxCreateTexture2D(gfx_, mmdepth_width, mmdepth_height, DXGI_FORMAT_R32G32_FLOAT, 7u);
+        minmax_depth                             = gfxCreateTexture2D(
+            gfx_, rc_probes[0].min.getWidth(), rc_probes[0].min.getHeight(), DXGI_FORMAT_R32G32_FLOAT, newOptions.rc_cascade_count + 2);
+        //minmax_depth = gfxCreateTexture2D(gfx_, mmdepth_width, mmdepth_height, DXGI_FORMAT_R32G32_FLOAT, newOptions.rc_cascade_count + 2);
         minmax_depth.setName(texNames[2]);
     }
     
+    options                  = newOptions;
+
     { // clear textures
         gfxCommandClearTexture(gfx_, rc_probes[0].min);
         gfxCommandClearTexture(gfx_, rc_probes[1].min);
@@ -127,7 +128,7 @@ void RCTechnique::render([[maybe_unused]] CapsaicinInternal &capsaicin) noexcept
         gfxProgramSetParameter(gfx_, minmax_depth_program, "g_Depth", capsaicin.getAOVBuffer("VisibilityDepth")); 
         gfxProgramSetParameter(gfx_, minmax_depth_program, "g_dst_dimensions", uint2(minmax_depth.getWidth(), minmax_depth.getHeight()));
         TimedSection minmax_depth_timer(*this, "min_max_depth");
-        for (uint i = 0; i <= cascade_count; i++)
+        for (uint i = 0; i < minmax_depth.getMipLevels(); i++)
         {
             gfxProgramSetParameter(gfx_, minmax_depth_program, "o_MinMaxDepth", minmax_depth, i);
             gfxProgramSetParameter(gfx_, minmax_depth_program, "g_mip_level", i);
@@ -195,11 +196,12 @@ void RCTechnique::render([[maybe_unused]] CapsaicinInternal &capsaicin) noexcept
 
     switch (options.rc_preaveraging)
     {
-    case PreAverage4: gfxCommandBindKernel(gfx_, rc_kernel_preavg4); break;
-    case PreAverage16: gfxCommandBindKernel(gfx_, rc_kernel_preavg16); break;
-    case PreAverage0:
-    default: gfxCommandBindKernel(gfx_, rc_kernel); break;
+        case PreAverage4: gfxCommandBindKernel(gfx_, rc_kernel_preavg4); break;
+        case PreAverage16: gfxCommandBindKernel(gfx_, rc_kernel_preavg16); break;
+        case PreAverage0:
+        default: gfxCommandBindKernel(gfx_, rc_kernel); break;
     }
+
     int last_output_texture = 0;
     {
         TimedSection rc_probes_timer(*this, "render_cascades");
@@ -213,8 +215,8 @@ void RCTechnique::render([[maybe_unused]] CapsaicinInternal &capsaicin) noexcept
         uint32_t        x = thread_nums[0], y = thread_nums[1];
         uint32_t        thread_size_x = uint32_t(glm::ceil(cascade_dimensions.x / float(x)));
         uint32_t        thread_size_y = uint32_t(glm::ceil(cascade_dimensions.y / float(y)));
-
-        for (int cascade_level = cascade_count; cascade_level >= 0; cascade_level -= 1)
+        int             cascade_rendering_stop = options.rc_single_cascade_only ? cascade_count : 0;
+        for (int cascade_level = cascade_count; cascade_level >= cascade_rendering_stop; cascade_level -= 1)
         {
             gfxProgramSetParameter(gfx_, rc_program, "g_cascadeId", cascade_level);
             bool  ping_pong   = cascade_level % 2 == 0;
@@ -229,8 +231,8 @@ void RCTechnique::render([[maybe_unused]] CapsaicinInternal &capsaicin) noexcept
             last_output_texture = ping_pong ? 1 : 0;
             gfxCommandDispatch(gfx_, thread_size_x, thread_size_y, 1); 
         }
-
     }
+
     if (options.rc_preaveraging != PreAverage16) // the preavg16 kernel already has 1 probe per pixel
     {
         TimedSection rc_final_average_timer(*this, "average c0");
@@ -259,15 +261,9 @@ void RCTechnique::render([[maybe_unused]] CapsaicinInternal &capsaicin) noexcept
 
     if (capsaicin.getCurrentDebugView() == "RCProbes")
     {
-        if (!debug_rc_program)
-        {
-            debug_rc_program = gfxCreateProgram(gfx_, "render_techniques/radiance_cascade/debug_rc_probes", capsaicin.getShaderPath());
-            GfxDrawState drawState;
-            gfxDrawStateSetColorTarget(drawState, 0, capsaicin.getAOVBuffer("Debug"));
-            debug_rc_kernel = gfxCreateGraphicsKernel(gfx_, debug_rc_program, drawState);
-        }
-        GfxCommandEvent const commandEvent(gfx_, "DrawDebugRCprobes");
-        gfxProgramSetParameter(gfx_, debug_rc_program, "g_CascadeTex", rc_probes[1]);
+//        GfxCommandEvent const commandEvent(gfx_, "DrawDebugRCprobes");
+        gfxProgramSetParameter(gfx_, debug_rc_program, "g_CascadeTex", rc_probes[last_output_texture].min);
+        gfxProgramSetParameter(gfx_, debug_rc_program, "g_nearestSampler", capsaicin.getNearestSampler());
         gfxCommandBindKernel(gfx_, debug_rc_kernel);
         gfxCommandDraw(gfx_, 3);
     }
@@ -281,6 +277,7 @@ RenderOptionList RCTechnique::getRenderOptions() noexcept
     newOptions.emplace(RENDER_OPTION_MAKE(rc_c0_length, options));
     newOptions.emplace(RENDER_OPTION_MAKE(rc_preaveraging, options));
     newOptions.emplace(RENDER_OPTION_MAKE(rc_resolution_factor, options));
+    newOptions.emplace(RENDER_OPTION_MAKE(rc_single_cascade_only, options));
     return newOptions;
 }
 
@@ -292,6 +289,7 @@ RCTechnique::RenderOptions RCTechnique::convertOptions(
     RENDER_OPTION_GET(rc_c0_length, newOptions, options);
     RENDER_OPTION_GET(rc_preaveraging, newOptions, options);
     RENDER_OPTION_GET(rc_resolution_factor, newOptions, options);
+    RENDER_OPTION_GET(rc_single_cascade_only, newOptions, options);
     return newOptions;
 }
 
@@ -331,6 +329,7 @@ DebugViewList RCTechnique::getDebugViews() const noexcept
 void RCTechnique::renderGUI([[maybe_unused]] CapsaicinInternal &capsaicin) const noexcept 
 {
     ImGui::SliderInt("Num cascades", &capsaicin.getOption<int>("rc_cascade_count"), 0, 6);
+    ImGui::Checkbox("Render single cascade only", &capsaicin.getOption<bool>("rc_single_cascade_only"));
     ImGui::SliderFloat(
         "C0 ray length", &capsaicin.getOption<float>("rc_c0_length"), 0.0000001f, 1.0f, "%.7f", ImGuiSliderFlags_Logarithmic);
     
@@ -364,7 +363,14 @@ bool RCTechnique::initKernel(CapsaicinInternal const& capsaicin) noexcept
     minmax_depth_kernel =
         gfxCreateComputeKernel(gfx_, minmax_depth_program, "MinMaxDepth", defines.data(), (uint32_t)defines.size());
 
-    
+    // this is easier than trying to create it when needed
+    #ifdef _DEBUG
+    debug_rc_program = gfxCreateProgram(gfx_, "render_techniques/radiance_cascade/debug_rc_probes", capsaicin.getShaderPath());
+    GfxDrawState drawState;
+    gfxDrawStateSetColorTarget(drawState, 0, capsaicin.getAOVBuffer("Debug"));
+    debug_rc_kernel = gfxCreateGraphicsKernel(gfx_, debug_rc_program, drawState);
+    #endif
+
     return !!rc_program;
 }
 
@@ -383,8 +389,8 @@ bool RCTechnique::initTextures(CapsaicinInternal const& capsaicin) noexcept
     }
     [[maybe_unused]]const uint32_t mmdepth_width = nearest_pow_2(capsaicin.getWidth());
     [[maybe_unused]]const uint32_t mmdepth_height = nearest_pow_2(capsaicin.getHeight());
-    //minmax_depth = gfxCreateTexture2D(gfx_, capsaicin.getWidth(), capsaicin.getHeight(), DXGI_FORMAT_R32G32_FLOAT, 7);
-    minmax_depth = gfxCreateTexture2D(gfx_, mmdepth_width, mmdepth_height, DXGI_FORMAT_R32G32_FLOAT, 7);
+    //minmax_depth = gfxCreateTexture2D(gfx_, capsaicin.getWidth(), capsaicin.getHeight(), DXGI_FORMAT_R32G32_FLOAT, capsaicin.getOption<int>("rc_cascade_count")+2);
+    minmax_depth = gfxCreateTexture2D(gfx_, mmdepth_width, mmdepth_height, DXGI_FORMAT_R32G32_FLOAT, capsaicin.getOption<int>("rc_cascade_count")+2);
     minmax_depth.setName(texNames[2]);
 
     return !!minmax_depth && !!rc_probes[0].max;

@@ -84,14 +84,9 @@ float IntervalScale(uint cascade_index)
 // TODO: figure out how I want to structure interval lengths. They must be long enough to reach opposing walls, but short enough to not be noticeable at close distances
 float2 GetInterval(uint cascade_index, float base_length)
 {
-    return base_length * float2(IntervalScale(cascade_index), IntervalScale(cascade_index + 1) + length(pow(2.0.xx, cascade_index+1))); // a little bit of interval overlap, as a treat
+    return base_length * float2(IntervalScale(cascade_index), IntervalScale(cascade_index + 1) + length(pow(2.0.xx, 0/*cascade_index*/))); // a little bit of interval overlap, as a treat
 }
 
-float4 MergeInterval(float4 near, float4 far)
-{
-    const float3 radiance = near.rgb + (far.rgb * near.a);
-    return float4(radiance, near.a * far.a);
-}
 
 float4 BilinearWeights(float2 ratio)
 {
@@ -263,6 +258,12 @@ float2 index_to_uv_offset(uint idx, uint2 sample_counts)
     return sample_idx / sample_counts; //[-0.5+0.5/sample_counts, 0.5-0.5/sample_counts] eg [-3/8, 3/8] for sc=4,4
 }
 
+float4 MergeInterval(float4 near, float4 far)
+{
+    const float3 radiance = near.rgb + (far.rgb * near.a);
+    return float4(radiance, near.a * far.a);
+}
+
 float4 TraceInterval(float2 interval, float3 origin, float3 direction, bool is_max_cascade)
 {
     float4 curr_radiance = float4(0.0, 0.0, 0.0, 1.0);
@@ -297,12 +298,12 @@ float4 TraceInterval(float2 interval, float3 origin, float3 direction, bool is_m
     }
     else if (is_max_cascade) // hit nothing, sample env. map if top cascade 
     {
-        curr_radiance.rgb = g_EnvironmentBuffer.SampleLevel(g_TextureSampler, ray.Direction, 0.0).rgb * 1.0;
-        //curr_radiance.a = 0;
 #if DEBUG_DISABLE_ENV_MAP
         curr_radiance.rgb = 0;
+#else
+        curr_radiance.rgb = g_EnvironmentBuffer.SampleLevel(g_TextureSampler, ray.Direction, 0.0).rgb * 1.0;
 #endif
-        //radiance.rgb = float3(1, 1, 1) * 0.03;
+        curr_radiance.a = 0;
     }
 #endif
     return curr_radiance;
@@ -441,7 +442,7 @@ void TraceCascadesPreAvg4(uint3 did : SV_DispatchThreadID)
     // get ray origin for this probe // TODO: different probes on min/max of depth buffer in this probe_position
     probe_normal = 2.0 * probe_normal - 1.0; // using this to offset the position, still getting self intersections...?
     #if PROBE_PLACEMENT == 0
-    const float3 origin = GetRayOriginDepthAware(probe_center_uv, probe_normal, g_cascadeId); // TODO: BUG: this gets us a bunch of stripes...? some resolution dependency with depth and probe textures, and weird self intersections. Depends on ray length??
+    const float3 origin = GetRayOriginDepthAware(probe_center_uv, probe_normal, g_cascadeId+1); // TODO: BUG: this gets us a bunch of stripes...? some resolution dependency with depth and probe textures, and weird self intersections. Depends on ray length??
     #elif PROBE_PLACEMENT == 1
     const float3 origin = GetRayOrigin(probe_center_uv, probe_normal);
     #endif
@@ -511,7 +512,7 @@ void TraceCascadesPreAvg16(uint3 did : SV_DispatchThreadID)
     // get ray origin for this probe // TODO: different probes on min/max of depth buffer in this probe_position
     probe_normal = 2.0 * probe_normal - 1.0; // using this to offset the position, still getting self intersections...?
     #if PROBE_PLACEMENT == 0
-    const float3 origin = GetRayOriginDepthAware(probe_center_uv, probe_normal, g_cascadeId); // BUG: this gets wacky stripes everywhere, dependent on ray length...?
+    const float3 origin = GetRayOriginDepthAware(probe_center_uv, probe_normal, g_cascadeId+1); // BUG: this gets wacky stripes everywhere, dependent on ray length...?
     #elif PROBE_PLACEMENT == 1
     const float3 origin = GetRayOrigin(probe_center_uv, probe_normal);
     #endif
@@ -554,11 +555,36 @@ void TraceCascadesPreAvg16(uint3 did : SV_DispatchThreadID)
     
 }
 
+void DebugInfo(uint3 did)
+{
+    // cascade constants
+    const float cascade_index = g_cascadeId;
+    const bool is_cascade_0 = cascade_index == 0;
+    const bool is_max_cascade = g_cascadeId == g_numCascades;
+    const float2 resolution = g_CascadeTexDimensions;
+    const float2 one_over_res = 1.0 / resolution;
+    const float2 probe_size = pow(2, cascade_index + 1); // size of the probe in pixels, c0 has 2x2 pixels / probe                   // TODO: variable scaling factor for probe size per cascade
+    const float2 num_probes = resolution / probe_size; // [res/2, res/4, res/8, ...] number of probes in x/y direction (unused?)
+    const float2 interval = GetInterval(cascade_index, g_c0_length); // the start and end distances of this cascade's interval
+    
+    // constants for this invocation (dependent on dispatch id)
+    const uint2 coord = did.xy;
+    // constants for this probe
+    const float2 probe_position = floor(coord / probe_size); // [0, num_probes] position of this probe in the grid of probes
+    const float2 probe_center = (probe_position + 0.5) * probe_size; // [probe_size/2, res - probe_size/2] the texel coordinate of the center of this probe (basically just recreating coord and adding .5?)
+    const float2 probe_center_uv = probe_center * one_over_res; // [0, 1] uv coordinate of this probe's center (the difference to uv = coord/res is tiiiiiny)
+    // constants for this pixel
+    const float2 pos_in_probe = coord % probe_size; // [0, probe_size] position of this pixel in the probe
+    
+    const float2 mmd = g_MinMaxDepth.SampleLevel(g_NearestSampler, coord * one_over_res, cascade_index + 1).rg;
+    o_currentCascade_min[coord] = float4(probe_center_uv , 1 - mmd.r, 1);
+}
+
 [numthreads(8,8,1)]
 void TraceCascades(uint3 did : SV_DispatchThreadID)
 {
-    //TraceCascadesPreAvg(did);
-    //return;
+    DebugInfo(did);
+    return;
     // constants for this cascade
     const float cascade_index = g_cascadeId;
     const bool is_cascade_0 = cascade_index == 0;
