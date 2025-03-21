@@ -50,6 +50,9 @@ float g_c0_length;
 float g_near;
 float g_far;
 
+// camera position in world space
+float3 g_Eye;
+
 float LinearizeDepth(float depth)
 {
     const float near = g_near; 
@@ -84,7 +87,8 @@ float IntervalScale(uint cascade_index)
 // TODO: figure out how I want to structure interval lengths. They must be long enough to reach opposing walls, but short enough to not be noticeable at close distances
 float2 GetInterval(uint cascade_index, float base_length)
 {
-    return base_length * float2(IntervalScale(cascade_index), IntervalScale(cascade_index + 1) + length(pow(2.0.xx, 0/*cascade_index*/))); // a little bit of interval overlap, as a treat
+    return base_length * float2(IntervalScale(cascade_index), IntervalScale(cascade_index + 1) + 1);
+    //length(pow(2.0.xx, 0 /*cascade_index*/))); // a little bit of interval overlap, as a treat
 }
 
 
@@ -125,10 +129,34 @@ float3 GetRayOriginDepthAware(float2 probe_uv, float3 normal, uint cascade_index
 {
     float2 min_max_depth = g_MinMaxDepth.SampleLevel(g_NearestSampler, probe_uv, cascade_index).rg;
     float depth = min_max_depth.r;
+    
+    #if 1
     float4x4 transform = g_ViewProjectionInverse;
-    float3 scaled_normal = normal * 1.0; //10000; // wtf am i doing here (it reduces self intersections i think...)
-    return offsetPosition(transformPointProjection(float3(2.0f * float2(probe_uv.x, 1.0f - probe_uv.y) - 1.0f, depth), transform), scaled_normal);
+    float3 scaled_normal = normal * 100.0; // wtf is this (avoid self intersections)
+    return offsetPosition(transformPointProjection(float3(2.0f.xx * float2(probe_uv.x, 1.0f - probe_uv.y) - 1.0f.xx, depth), transform), scaled_normal);
+    //return transformPointProjection(float3(2.0f * float2(probe_uv.x, 1.0f - probe_uv.y) - 1.0f, depth), transform) + normal * 1.0/32.0; // this seems safer than the admittedly cool offsetPosition(), but it's way more noticeable.
     //return transformPointProjection(float3(2.0f * float2(probe_uv.x, 1.0f - probe_uv.y) - 1.0f, depth), transform);
+    #else
+    float4 visibility = g_VisibilityBuffer.SampleLevel(g_NearestSampler, probe_uv, 0);
+
+    float2 barycentrics = visibility.xy;
+    uint instanceID = asuint(visibility.z);
+    uint primitiveID = asuint(visibility.w);
+
+    Instance instance = g_InstanceBuffer[instanceID];
+    Mesh mesh = g_MeshBuffer[instance.mesh_index];
+    float3x4 transform = g_TransformBuffer[instance.transform_index];
+
+    Triangle vertices = fetchVertices(mesh, primitiveID);
+    float3 v0 = transformPoint(vertices.v0, transform);
+    float3 v1 = transformPoint(vertices.v1, transform);
+    float3 v2 = transformPoint(vertices.v2, transform);
+
+    float3 world = interpolate(v0, v1, v2, barycentrics);
+    world += LinearizeDepth(depth) * normalize(world - g_Eye); // TODO: find a way to move the worldspace position according to the depth instead of generating it from the depth
+    float3 origin = offsetPosition(world, normal);
+    return origin;
+    #endif
 }
 
 float3 GetRayOrigin(float2 probe_uv, float3 normal)
@@ -228,7 +256,7 @@ inline float3 oct_decode(const float2 e)
     const float cos_phi = copysign(cos(phi), e.x);
     const float sin_phi = copysign(sin(phi), e.y);
     const float r_scl = r * sqrt(2.0 - r_sqr);
-    return float3(cos_phi * r_scl, sin_phi * r_scl, z);
+    return float3(cos_phi * r_scl, sin_phi * r_scl, z).xyz;
 }
 /*- end direction mapping -*/
 
@@ -440,7 +468,7 @@ void TraceCascadesPreAvg4(uint3 did : SV_DispatchThreadID)
         return; // sky pixel does not reflect
     }
     // get ray origin for this probe // TODO: different probes on min/max of depth buffer in this probe_position
-    probe_normal = 2.0 * probe_normal - 1.0; // using this to offset the position, still getting self intersections...?
+    probe_normal = normalize(2.0 * probe_normal - 1.0); // using this to offset the position, still getting self intersections...?
     #if PROBE_PLACEMENT == 0
     const float3 origin = GetRayOriginDepthAware(probe_center_uv, probe_normal, g_cascadeId+1); // TODO: BUG: this gets us a bunch of stripes...? some resolution dependency with depth and probe textures, and weird self intersections. Depends on ray length??
     #elif PROBE_PLACEMENT == 1
@@ -510,9 +538,9 @@ void TraceCascadesPreAvg16(uint3 did : SV_DispatchThreadID)
         return; // sky pixel does not reflect
     }
     // get ray origin for this probe // TODO: different probes on min/max of depth buffer in this probe_position
-    probe_normal = 2.0 * probe_normal - 1.0; // using this to offset the position, still getting self intersections...?
+    probe_normal = normalize(2.0 * probe_normal - 1.0); // using this to offset the position, still getting self intersections...?
     #if PROBE_PLACEMENT == 0
-    const float3 origin = GetRayOriginDepthAware(probe_center_uv, probe_normal, g_cascadeId+1); // BUG: this gets wacky stripes everywhere, dependent on ray length...?
+    const float3 origin = GetRayOriginDepthAware(probe_center_uv, probe_normal, g_cascadeId); // BUG: this gets wacky stripes everywhere, dependent on ray length...?
     #elif PROBE_PLACEMENT == 1
     const float3 origin = GetRayOrigin(probe_center_uv, probe_normal);
     #endif

@@ -11,10 +11,14 @@ namespace Capsaicin
 
 static constexpr uint nearest_pow_2(uint const n)
 {
+    #if 1
+    return n;
+    #else
     constexpr uint size       = sizeof(uint) * 8;
     uint const     next_pow_2 = (1 << (size - std::countl_zero(n)));
     uint const     prev_pow_2 = next_pow_2 >> 1;
     return (n - prev_pow_2) < (next_pow_2 - n) ? prev_pow_2 : next_pow_2;
+    #endif
 }
 
 RCTechnique::RCTechnique()
@@ -229,7 +233,7 @@ void RCTechnique::render([[maybe_unused]] CapsaicinInternal &capsaicin) noexcept
                 gfx_, rc_program, "o_currentCascade_max", rc_probes[ping_pong ? 1 : 0].max);
             
             last_output_texture = ping_pong ? 1 : 0;
-            gfxCommandDispatch(gfx_, thread_size_x, thread_size_y, 1); 
+            gfxCommandDispatch(gfx_, thread_size_x, thread_size_y, 1);  // TODO: BUG: c5 and c6 - probes at uv.y ~> 0.62 <~ are showing being placed on opposite side of floor with DA placement strategy...
         }
     }
 
@@ -261,7 +265,7 @@ void RCTechnique::render([[maybe_unused]] CapsaicinInternal &capsaicin) noexcept
 
     if (capsaicin.getCurrentDebugView() == "RCProbes")
     {
-//        GfxCommandEvent const commandEvent(gfx_, "DrawDebugRCprobes");
+//        GfxCommandEvent const commandEvent(gfx_, "DrawDebugRCprobes"); // BUG: this just causes shader reloading to break for some reason
         gfxProgramSetParameter(gfx_, debug_rc_program, "g_CascadeTex", rc_probes[last_output_texture].min);
         gfxProgramSetParameter(gfx_, debug_rc_program, "g_nearestSampler", capsaicin.getNearestSampler());
         gfxCommandBindKernel(gfx_, debug_rc_kernel);
