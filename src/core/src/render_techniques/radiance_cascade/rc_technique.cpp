@@ -224,20 +224,21 @@ void RCTechnique::render([[maybe_unused]] CapsaicinInternal &capsaicin) noexcept
         {
             gfxProgramSetParameter(gfx_, rc_program, "g_cascadeId", cascade_level);
             bool  ping_pong   = cascade_level % 2 == 0;
+            last_output_texture = ping_pong ? 0 : 1;
 
-            gfxProgramSetParameter(gfx_, rc_program, "g_lastCascade_min", rc_probes[ping_pong ? 0 : 1].min);
-            gfxProgramSetParameter(gfx_, rc_program, "o_currentCascade_min", rc_probes[ping_pong ? 1 : 0].min);
+            gfxProgramSetParameter(gfx_, rc_program, "g_lastCascade_min", rc_probes[last_output_texture].min);
+            gfxProgramSetParameter(gfx_, rc_program, "o_currentCascade_min", rc_probes[1 - last_output_texture].min);
 
-            gfxProgramSetParameter(gfx_, rc_program, "g_lastCascade_max", rc_probes[ping_pong ? 0 : 1].max);
+            gfxProgramSetParameter(gfx_, rc_program, "g_lastCascade_max", rc_probes[last_output_texture].max);
             gfxProgramSetParameter(
-                gfx_, rc_program, "o_currentCascade_max", rc_probes[ping_pong ? 1 : 0].max);
+                gfx_, rc_program, "o_currentCascade_max", rc_probes[1 - last_output_texture].max);
             
-            last_output_texture = ping_pong ? 1 : 0;
-            gfxCommandDispatch(gfx_, thread_size_x, thread_size_y, 1);  // TODO: BUG: c5 and c6 - probes at uv.y ~> 0.62 <~ are showing being placed on opposite side of floor with DA placement strategy...
+            gfxCommandDispatch(gfx_, thread_size_x, thread_size_y, 1);  // TODO: BUG: c5 and c6 - probes at uv.y ~> 0.62 <~ are showing being placed on opposite side of floor with DA placement strategy (seems interval length dependent)...
+            last_output_texture = 1 - last_output_texture;
         }
     }
 
-    if (options.rc_preaveraging != PreAverage16) // the preavg16 kernel already has 1 probe per pixel
+    if (options.rc_preaveraging != PreAverage16 && !options.rc_single_cascade_only) // the preavg16 kernel already has 1 probe per pixel
     {
         TimedSection rc_final_average_timer(*this, "average c0");
         gfxCommandBindKernel(gfx_, rc_average_kernel);
@@ -263,15 +264,17 @@ void RCTechnique::render([[maybe_unused]] CapsaicinInternal &capsaicin) noexcept
         gfxCommandDraw(gfx_, 3);
     }
 
+    #if _DEBUG
     if (capsaicin.getCurrentDebugView() == "RCProbes")
     {
 //        GfxCommandEvent const commandEvent(gfx_, "DrawDebugRCprobes"); // BUG: this just causes shader reloading to break for some reason
         gfxProgramSetParameter(gfx_, debug_rc_program, "g_CascadeTex", rc_probes[last_output_texture].min);
         gfxProgramSetParameter(gfx_, debug_rc_program, "g_nearestSampler", capsaicin.getNearestSampler());
+        gfxProgramSetParameter(gfx_, debug_rc_program, "g_buffer_dimensions", buffer_dimensions);
         gfxCommandBindKernel(gfx_, debug_rc_kernel);
         gfxCommandDraw(gfx_, 3);
     }
-
+    #endif
 }
 
 RenderOptionList RCTechnique::getRenderOptions() noexcept 

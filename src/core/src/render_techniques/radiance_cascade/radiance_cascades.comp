@@ -132,8 +132,10 @@ float3 GetRayOriginDepthAware(float2 probe_uv, float3 normal, uint cascade_index
     
     #if 1
     float4x4 transform = g_ViewProjectionInverse;
-    float3 scaled_normal = normal * 100.0; // wtf is this (avoid self intersections)
-    return offsetPosition(transformPointProjection(float3(2.0f.xx * float2(probe_uv.x, 1.0f - probe_uv.y) - 1.0f.xx, depth), transform), scaled_normal);
+    float3 scaled_normal = normal * 1.0; // wtf is this (avoid self intersections)
+    float3 world = transformPointProjection(float3(2.0f.xx * float2(probe_uv.x, 1.0f - probe_uv.y) - 1.0f.xx, depth), transform); // this causes probes at c4+ in the lower half of the grid to spawn under the floor...
+    float3 origin = offsetPosition(world, scaled_normal);
+    return origin;
     //return transformPointProjection(float3(2.0f * float2(probe_uv.x, 1.0f - probe_uv.y) - 1.0f, depth), transform) + normal * 1.0/32.0; // this seems safer than the admittedly cool offsetPosition(), but it's way more noticeable.
     //return transformPointProjection(float3(2.0f * float2(probe_uv.x, 1.0f - probe_uv.y) - 1.0f, depth), transform);
     #else
@@ -604,8 +606,12 @@ void DebugInfo(uint3 did)
     // constants for this pixel
     const float2 pos_in_probe = coord % probe_size; // [0, probe_size] position of this pixel in the probe
     
-    const float2 mmd = g_MinMaxDepth.SampleLevel(g_NearestSampler, coord * one_over_res, cascade_index + 1).rg;
-    o_currentCascade_min[coord] = float4(probe_center_uv , 1 - mmd.r, 1);
+    const float2 mmd = g_MinMaxDepth.SampleLevel(g_NearestSampler, probe_center_uv, cascade_index + 1).rg;
+    const float3 normal = g_GeometryNormalBuffer.SampleLevel(g_NearestSampler, probe_center_uv, 0).xyz;
+    const float3 origin = (GetRayOriginDepthAware(probe_center_uv, normal, cascade_index));
+    const float3 od = (GetRayOrigin(probe_center_uv, normal));
+    const float3 diff = (origin - od) * 1.0f;
+    o_currentCascade_min[coord] = float4(diff, 1);
 }
 
 [numthreads(8,8,1)]
