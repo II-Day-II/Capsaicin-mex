@@ -1,8 +1,6 @@
 ﻿
 #include "../../gpu_shared.h"
 
-
-Texture2D g_Depth;
 Texture2D g_GeometryNormalBuffer;
 Texture2D g_VisibilityBuffer;
 
@@ -124,41 +122,29 @@ uint2 BilinearOffset(uint i)
     return offsets[i];
 }
 
+struct TwoPos
+{
+    float3 near;
+    float3 far;
+};
 // TODO: account for probe depth (get from minmax depth)
-float3 GetRayOriginDepthAware(float2 probe_uv, float3 normal, uint cascade_index)
+TwoPos GetRayOriginDepthAware(float2 probe_uv, float3 normal, uint cascade_index)
 {
     float2 min_max_depth = g_MinMaxDepth.SampleLevel(g_NearestSampler, probe_uv, cascade_index).rg;
     float depth = min_max_depth.r;
     
-    #if 1
     float4x4 transform = g_ViewProjectionInverse;
     float3 scaled_normal = normal * 1.0; // wtf is this (avoid self intersections)
-    float3 world = transformPointProjection(float3(2.0f.xx * float2(probe_uv.x, 1.0f - probe_uv.y) - 1.0f.xx, depth), transform); // this causes probes at c4+ in the lower half of the grid to spawn under the floor...
-    float3 origin = offsetPosition(world, scaled_normal);
-    return origin;
+    float3 world_min = transformPointProjection(float3(2.0f.xx * float2(probe_uv.x, 1.0f - probe_uv.y) - 1.0f.xx, depth), transform); // this causes probes at c4+ in the lower half of the grid to spawn under the floor...
+    float3 origin_min = offsetPosition(world_min, scaled_normal);
+    depth = min_max_depth.g;
+    float3 world_max = transformPointProjection(float3(2.0f.xx * float2(probe_uv.x, 1.0f - probe_uv.y) - 1.0f.xx, depth), transform); 
+    float3 origin_max = offsetPosition(world_max, scaled_normal);
+    TwoPos ret = {origin_min, origin_max};
+    return ret;
     //return transformPointProjection(float3(2.0f * float2(probe_uv.x, 1.0f - probe_uv.y) - 1.0f, depth), transform) + normal * 1.0/32.0; // this seems safer than the admittedly cool offsetPosition(), but it's way more noticeable.
     //return transformPointProjection(float3(2.0f * float2(probe_uv.x, 1.0f - probe_uv.y) - 1.0f, depth), transform);
-    #else
-    float4 visibility = g_VisibilityBuffer.SampleLevel(g_NearestSampler, probe_uv, 0);
 
-    float2 barycentrics = visibility.xy;
-    uint instanceID = asuint(visibility.z);
-    uint primitiveID = asuint(visibility.w);
-
-    Instance instance = g_InstanceBuffer[instanceID];
-    Mesh mesh = g_MeshBuffer[instance.mesh_index];
-    float3x4 transform = g_TransformBuffer[instance.transform_index];
-
-    Triangle vertices = fetchVertices(mesh, primitiveID);
-    float3 v0 = transformPoint(vertices.v0, transform);
-    float3 v1 = transformPoint(vertices.v1, transform);
-    float3 v2 = transformPoint(vertices.v2, transform);
-
-    float3 world = interpolate(v0, v1, v2, barycentrics);
-    world += LinearizeDepth(depth) * normalize(world - g_Eye); // TODO: find a way to move the worldspace position according to the depth instead of generating it from the depth
-    float3 origin = offsetPosition(world, normal);
-    return origin;
-    #endif
 }
 
 float3 GetRayOrigin(float2 probe_uv, float3 normal)
@@ -472,7 +458,7 @@ void TraceCascadesPreAvg4(uint3 did : SV_DispatchThreadID)
     // get ray origin for this probe // TODO: different probes on min/max of depth buffer in this probe_position
     probe_normal = normalize(2.0 * probe_normal - 1.0); // using this to offset the position, still getting self intersections...?
     #if PROBE_PLACEMENT == 0
-    const float3 origin = GetRayOriginDepthAware(probe_center_uv, probe_normal, g_cascadeId+1); // TODO: BUG: this gets us a bunch of stripes...? some resolution dependency with depth and probe textures, and weird self intersections. Depends on ray length??
+    const float3 origin = GetRayOriginDepthAware(probe_center_uv, probe_normal, g_cascadeId+1).near; // TODO: BUG: this gets us a bunch of stripes...? some resolution dependency with depth and probe textures, and weird self intersections. Depends on ray length??
     #elif PROBE_PLACEMENT == 1
     const float3 origin = GetRayOrigin(probe_center_uv, probe_normal);
     #endif
@@ -542,7 +528,7 @@ void TraceCascadesPreAvg16(uint3 did : SV_DispatchThreadID)
     // get ray origin for this probe // TODO: different probes on min/max of depth buffer in this probe_position
     probe_normal = normalize(2.0 * probe_normal - 1.0); // using this to offset the position, still getting self intersections...?
     #if PROBE_PLACEMENT == 0
-    const float3 origin = GetRayOriginDepthAware(probe_center_uv, probe_normal, g_cascadeId); // BUG: this gets wacky stripes everywhere, dependent on ray length...?
+    const float3 origin = GetRayOriginDepthAware(probe_center_uv, probe_normal, g_cascadeId).near; // BUG: this gets wacky stripes everywhere, dependent on ray length...?
     #elif PROBE_PLACEMENT == 1
     const float3 origin = GetRayOrigin(probe_center_uv, probe_normal);
     #endif
@@ -606,12 +592,16 @@ void DebugInfo(uint3 did)
     // constants for this pixel
     const float2 pos_in_probe = coord % probe_size; // [0, probe_size] position of this pixel in the probe
     
-    const float2 mmd = g_MinMaxDepth.SampleLevel(g_NearestSampler, probe_center_uv, cascade_index + 1).rg;
+    const float2 mmd = g_MinMaxDepth.SampleLevel(g_NearestSampler, probe_center_uv, cascade_index +1).rg;
+    const float2 mmd2 = g_MinMaxDepth.SampleLevel(g_NearestSampler, probe_center_uv, cascade_index).rg;
+    const float real_depth = g_MinMaxDepth.SampleLevel(g_NearestSampler, probe_center_uv, 0).r;
     const float3 normal = g_GeometryNormalBuffer.SampleLevel(g_NearestSampler, probe_center_uv, 0).xyz;
-    const float3 origin = (GetRayOriginDepthAware(probe_center_uv, normal, cascade_index));
-    const float3 od = (GetRayOrigin(probe_center_uv, normal));
-    const float3 diff = (origin - od) * 1.0f;
-    o_currentCascade_min[coord] = float4(diff, 1);
+    const float3 origin_mmd = GetRayOriginDepthAware(probe_center_uv, normal, cascade_index+1).near;
+    const float3 origin_center = GetRayOrigin(probe_center_uv, normal);
+    const float3 origin_re_real = GetRayOriginDepthAware(probe_center_uv, normal, 0).near;
+    const float3 origin_diff = (origin_mmd - origin_re_real) * 1.0f;
+    const float2 depth_diff = (mmd - mmd2);
+    o_currentCascade_min[coord] = float4(depth_diff.rrr * 100, 1);
 }
 
 [numthreads(8,8,1)]

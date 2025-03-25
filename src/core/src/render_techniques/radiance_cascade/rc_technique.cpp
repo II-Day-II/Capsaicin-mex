@@ -11,7 +11,7 @@ namespace Capsaicin
 
 static constexpr uint nearest_pow_2(uint const n)
 {
-    #if 1
+    #if 0
     return n;
     #else
     constexpr uint size       = sizeof(uint) * 8;
@@ -92,16 +92,16 @@ void RCTechnique::render([[maybe_unused]] CapsaicinInternal &capsaicin) noexcept
     }
 
 
-    // resize minmax depth if necessary
-    //if (minmax_depth.getWidth() != nearest_pow_2(capsaicin.getWidth()) || minmax_depth.getHeight() != nearest_pow_2(capsaicin.getHeight()))
-    if (minmax_depth.getWidth() != rc_probes[0].min.getWidth() || minmax_depth.getHeight() != rc_probes[0].min.getHeight() || options.rc_cascade_count != newOptions.rc_cascade_count)
+    // resize minmax depth if necessary. 
+    // This HAS to be a pow2 texture i think...
+    if (minmax_depth.getWidth() != nearest_pow_2(capsaicin.getWidth()) || minmax_depth.getHeight() != nearest_pow_2(capsaicin.getHeight()))
+    //if (minmax_depth.getWidth() != rc_probes[0].min.getWidth() || minmax_depth.getHeight() != rc_probes[0].min.getHeight() || options.rc_cascade_count != newOptions.rc_cascade_count)
     {
         gfxDestroyTexture(gfx_, minmax_depth);
         [[maybe_unused]]uint32_t mmdepth_width = nearest_pow_2(capsaicin.getWidth());
         [[maybe_unused]]uint32_t mmdepth_height = nearest_pow_2(capsaicin.getHeight());
-        minmax_depth                             = gfxCreateTexture2D(
-            gfx_, rc_probes[0].min.getWidth(), rc_probes[0].min.getHeight(), DXGI_FORMAT_R32G32_FLOAT, newOptions.rc_cascade_count + 2);
-        //minmax_depth = gfxCreateTexture2D(gfx_, mmdepth_width, mmdepth_height, DXGI_FORMAT_R32G32_FLOAT, newOptions.rc_cascade_count + 2);
+        //minmax_depth = gfxCreateTexture2D(gfx_, rc_probes[0].min.getWidth(), rc_probes[0].min.getHeight(), DXGI_FORMAT_R32G32_FLOAT, newOptions.rc_cascade_count + 2);
+        minmax_depth = gfxCreateTexture2D(gfx_, mmdepth_width, mmdepth_height, DXGI_FORMAT_R32G32_FLOAT, newOptions.rc_cascade_count + 2);
         minmax_depth.setName(texNames[2]);
     }
     
@@ -166,14 +166,9 @@ void RCTechnique::render([[maybe_unused]] CapsaicinInternal &capsaicin) noexcept
     gfxProgramSetParameter(gfx_, rc_program, "g_LinearSampler", capsaicin.getLinearSampler());
     gfxProgramSetParameter(gfx_, rc_program, "g_TextureSampler", capsaicin.getLinearWrapSampler());
 
-    gfxProgramSetParameter(gfx_, rc_program, "g_Depth", capsaicin.getAOVBuffer("VisibilityDepth"));
-
 
     gfxProgramSetParameter(
         gfx_, rc_program, "g_GeometryNormalBuffer", capsaicin.getAOVBuffer("GeometryNormal"));
-    gfxProgramSetParameter(
-        gfx_, rc_program, "g_ShadingNormalBuffer", capsaicin.getAOVBuffer("ShadingNormal"));
-    gfxProgramSetParameter(gfx_, rc_program, "g_DepthBuffer", capsaicin.getAOVBuffer("VisibilityDepth"));
 
     brdf_lut->addProgramParameters(capsaicin, rc_program);
     //light_sampler->addProgramParameters(capsaicin, rc_program);
@@ -311,7 +306,7 @@ ComponentList RCTechnique::getComponents() const noexcept
 AOVList RCTechnique::getAOVs() const noexcept
 {
     AOVList aovs;
-    aovs.push_back({"VisibilityDepth", AOV::Read});
+    aovs.push_back({"VisibilityDepth", AOV::Read}); // TODO: HELP: Do I need EVERY SINGLE TEXTURE to be pow2?
     aovs.push_back({"GeometryNormal", AOV::Read});
     aovs.push_back({"Visibility", AOV::Read});
    
@@ -384,7 +379,7 @@ bool RCTechnique::initKernel(CapsaicinInternal const& capsaicin) noexcept
 bool RCTechnique::initTextures(CapsaicinInternal const& capsaicin) noexcept
 {
     capsaicin;
-    constexpr uint32_t probes_width = nearest_pow_2(1920);
+    constexpr uint32_t probes_width  = nearest_pow_2(1920);
     constexpr uint32_t probes_height = nearest_pow_2(1080);
     for (uint32_t i = 0; i < 2; i++)
     {

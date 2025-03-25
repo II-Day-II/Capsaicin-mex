@@ -1,4 +1,4 @@
-
+﻿
 Texture2D g_Depth; // the full res depth texture
 uint g_mip_level;
 RWTexture2D<float2> o_MinMaxDepth; // the texture we're writing to
@@ -12,8 +12,11 @@ void MinMaxDepth(uint3 did : SV_DispatchThreadID)
     uint3 src_dimensions;
     g_Depth.GetDimensions(0, src_dimensions.x, src_dimensions.y, src_dimensions.z);
     
+    uint2 dst_dimensions;
+    o_MinMaxDepth.GetDimensions(dst_dimensions.x, dst_dimensions.y); // This has a different aspect ratio for each mip 😬
+    
     // This "resizes" the texture while doing the depth minmaxing, from 1920x1080 -> 2048x1024, causes some stretching
-    float2 aspect_correction = float2(src_dimensions.xy) / float2(g_dst_dimensions); // TODO: BUG: causes far right to be missed sometimes
+    float2 aspect_correction = float2(src_dimensions.xy) / float2(g_dst_dimensions); // TODO: BUG: causes far right and bottom to be missed sometimes
     
     uint2 coord = did.xy; 
     uint2 probe_size = pow(2, g_mip_level);
