@@ -92,16 +92,16 @@ void RCTechnique::render([[maybe_unused]] CapsaicinInternal &capsaicin) noexcept
     }
 
 
-    // resize minmax depth if necessary. 
-    // This HAS to be a pow2 texture i think...
-    if (minmax_depth.getWidth() != nearest_pow_2(capsaicin.getWidth()) || minmax_depth.getHeight() != nearest_pow_2(capsaicin.getHeight()))
-    //if (minmax_depth.getWidth() != rc_probes[0].min.getWidth() || minmax_depth.getHeight() != rc_probes[0].min.getHeight() || options.rc_cascade_count != newOptions.rc_cascade_count)
+    // resize minmax depth if necessary
+    //if (minmax_depth.getWidth() != nearest_pow_2(capsaicin.getWidth()) || minmax_depth.getHeight() != nearest_pow_2(capsaicin.getHeight()))
+    if (minmax_depth.getWidth() != rc_probes[0].min.getWidth() || minmax_depth.getHeight() != rc_probes[0].min.getHeight() || options.rc_cascade_count != newOptions.rc_cascade_count)
     {
         gfxDestroyTexture(gfx_, minmax_depth);
         [[maybe_unused]]uint32_t mmdepth_width = nearest_pow_2(capsaicin.getWidth());
         [[maybe_unused]]uint32_t mmdepth_height = nearest_pow_2(capsaicin.getHeight());
-        //minmax_depth = gfxCreateTexture2D(gfx_, rc_probes[0].min.getWidth(), rc_probes[0].min.getHeight(), DXGI_FORMAT_R32G32_FLOAT, newOptions.rc_cascade_count + 2);
-        minmax_depth = gfxCreateTexture2D(gfx_, mmdepth_width, mmdepth_height, DXGI_FORMAT_R32G32_FLOAT, newOptions.rc_cascade_count + 2);
+        minmax_depth = gfxCreateTexture2D(gfx_, rc_probes[0].min.getWidth(), rc_probes[0].min.getHeight(), DXGI_FORMAT_R32G32_FLOAT, newOptions.rc_cascade_count + 2);
+        //minmax_depth = gfxCreateTexture2D(gfx_, mmdepth_width, mmdepth_height, DXGI_FORMAT_R32G32_FLOAT, newOptions.rc_cascade_count + 2);
+
         minmax_depth.setName(texNames[2]);
     }
     
@@ -150,8 +150,8 @@ void RCTechnique::render([[maybe_unused]] CapsaicinInternal &capsaicin) noexcept
 
     gfxProgramSetParameter(gfx_, rc_program, "g_BufferDimensions", buffer_dimensions);
     uint2 cascade_dimensions = buffer_dimensions / 2u;
-    cascade_dimensions.y = rc_probes[0].min.getHeight();
     cascade_dimensions.x = rc_probes[0].min.getWidth();
+    cascade_dimensions.y = rc_probes[0].min.getHeight();
     gfxProgramSetParameter(gfx_, rc_program, "g_CascadeTexDimensions", cascade_dimensions); 
 
     
@@ -228,7 +228,7 @@ void RCTechnique::render([[maybe_unused]] CapsaicinInternal &capsaicin) noexcept
             gfxProgramSetParameter(
                 gfx_, rc_program, "o_currentCascade_max", rc_probes[1 - last_output_texture].max);
             
-            gfxCommandDispatch(gfx_, thread_size_x, thread_size_y, 1);  // TODO: BUG: c5 and c6 - probes at uv.y ~> 0.62 <~ are showing being placed on opposite side of floor with DA placement strategy (seems interval length dependent)...
+            gfxCommandDispatch(gfx_, thread_size_x, thread_size_y, 1);  // TODO: BUG: c5 and c6 - probes at uv.y ~> 0.62 <~ are showing being placed on opposite side of floor with DA placement strategy (seems resolution dependent)...
             last_output_texture = 1 - last_output_texture;
         }
     }
@@ -306,7 +306,7 @@ ComponentList RCTechnique::getComponents() const noexcept
 AOVList RCTechnique::getAOVs() const noexcept
 {
     AOVList aovs;
-    aovs.push_back({"VisibilityDepth", AOV::Read}); // TODO: HELP: Do I need EVERY SINGLE TEXTURE to be pow2?
+    aovs.push_back({"VisibilityDepth", AOV::Read}); // TODO: HELP: Do I need EVERY SINGLE TEXTURE to be pow2? Basically yes... ;_;
     aovs.push_back({"GeometryNormal", AOV::Read});
     aovs.push_back({"Visibility", AOV::Read});
    

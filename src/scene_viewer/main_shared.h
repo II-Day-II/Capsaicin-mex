@@ -57,6 +57,12 @@ protected:
         FlyingWorld = 0,
         GasStation,
         TropicalBedroom,
+        Sponza,
+        BreakfastRoom,
+        CornellBox,
+        CornellSphere,
+        CornellLight,
+        ECube,
     };
 
     enum class EnvironmentMap : uint32_t
@@ -159,9 +165,9 @@ protected:
      */
     std::string getSaveName() const noexcept;
 
-    static constexpr auto defaultScene          = Scene::FlyingWorld;
+    static constexpr auto defaultScene          = Scene::CornellBox;
     static constexpr auto defaultEnvironmentMap = EnvironmentMap::KiaraDawn;
-    static constexpr auto defaultRenderer       = "GI-1.1";
+    static constexpr auto defaultRenderer       = "RC renderer"; //"GI-1.1";
 
     GfxWindow        window;                       /**< Gfx window class */
     GfxContext       contextGFX;                   /**< Gfx context */

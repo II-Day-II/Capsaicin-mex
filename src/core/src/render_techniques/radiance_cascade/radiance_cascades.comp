@@ -67,11 +67,6 @@ float2 LinearizeDepth(float2 depth)
     return (2.0 * near * far) / (far + near - ndcz * (far - near));
 }
 
-float3 GetProbeNormal(uint2 coord)
-{
-    return g_GeometryNormalBuffer.Load(int3(coord, 0)).xyz;
-}
-
 float IntervalScale(uint cascade_index)
 {
     if (cascade_index == 0)
@@ -575,32 +570,20 @@ void DebugInfo(uint3 did)
 {
     // cascade constants
     const float cascade_index = g_cascadeId;
-    const bool is_cascade_0 = cascade_index == 0;
-    const bool is_max_cascade = g_cascadeId == g_numCascades;
     const float2 resolution = g_CascadeTexDimensions;
     const float2 one_over_res = 1.0 / resolution;
     const float2 probe_size = pow(2, cascade_index + 1); // size of the probe in pixels, c0 has 2x2 pixels / probe                   // TODO: variable scaling factor for probe size per cascade
-    const float2 num_probes = resolution / probe_size; // [res/2, res/4, res/8, ...] number of probes in x/y direction (unused?)
-    const float2 interval = GetInterval(cascade_index, g_c0_length); // the start and end distances of this cascade's interval
-    
     // constants for this invocation (dependent on dispatch id)
     const uint2 coord = did.xy;
     // constants for this probe
     const float2 probe_position = floor(coord / probe_size); // [0, num_probes] position of this probe in the grid of probes
     const float2 probe_center = (probe_position + 0.5) * probe_size; // [probe_size/2, res - probe_size/2] the texel coordinate of the center of this probe (basically just recreating coord and adding .5?)
     const float2 probe_center_uv = probe_center * one_over_res; // [0, 1] uv coordinate of this probe's center (the difference to uv = coord/res is tiiiiiny)
-    // constants for this pixel
-    const float2 pos_in_probe = coord % probe_size; // [0, probe_size] position of this pixel in the probe
+  
     
     const float2 mmd = g_MinMaxDepth.SampleLevel(g_NearestSampler, probe_center_uv, cascade_index +1).rg;
     const float2 mmd2 = g_MinMaxDepth.SampleLevel(g_NearestSampler, probe_center_uv, cascade_index).rg;
-    const float real_depth = g_MinMaxDepth.SampleLevel(g_NearestSampler, probe_center_uv, 0).r;
-    const float3 normal = g_GeometryNormalBuffer.SampleLevel(g_NearestSampler, probe_center_uv, 0).xyz;
-    const float3 origin_mmd = GetRayOriginDepthAware(probe_center_uv, normal, cascade_index+1).near;
-    const float3 origin_center = GetRayOrigin(probe_center_uv, normal);
-    const float3 origin_re_real = GetRayOriginDepthAware(probe_center_uv, normal, 0).near;
-    const float3 origin_diff = (origin_mmd - origin_re_real) * 1.0f;
-    const float2 depth_diff = (mmd - mmd2);
+    const float2 depth_diff = abs(mmd - mmd2);
     o_currentCascade_min[coord] = float4(depth_diff.rrr * 100, 1);
 }
 
