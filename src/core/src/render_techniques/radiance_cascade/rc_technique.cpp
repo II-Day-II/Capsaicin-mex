@@ -253,6 +253,8 @@ void RCTechnique::render([[maybe_unused]] CapsaicinInternal &capsaicin) noexcept
     // something happens to the texture here ??? incorrect sync??? gfxPlease????
     {
         TimedSection resolve(*this, "ResolveRCGI");
+        gfxProgramSetParameter(gfx_, rc_program, "g_DepthBuffer", capsaicin.getAOVBuffer("VisibilityDepth"));
+        gfxProgramSetParameter(gfx_, rc_program, "g_ShadingNormalBuffer", capsaicin.getAOVBuffer("ShadingNormal"));
         gfxProgramSetParameter(gfx_, rc_program, "g_TextureSampler", capsaicin.getAnisotropicSampler());
         gfxProgramSetParameter(gfx_, rc_program, "g_IrradianceBuffer", rc_probes[last_output_texture].min); // TODO: do i need to account for min/max on final cascade?
         gfxCommandBindKernel(gfx_, rc_resolve_kernel);
@@ -378,7 +380,6 @@ bool RCTechnique::initKernel(CapsaicinInternal const& capsaicin) noexcept
 
 bool RCTechnique::initTextures(CapsaicinInternal const& capsaicin) noexcept
 {
-    capsaicin;
     constexpr uint32_t probes_width  = nearest_pow_2(1920);
     constexpr uint32_t probes_height = nearest_pow_2(1080);
     for (uint32_t i = 0; i < 2; i++)
