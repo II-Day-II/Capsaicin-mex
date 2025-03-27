@@ -1,0 +1,37 @@
+
+Texture2D g_GeometryNormalBuffer;
+Texture2D g_DepthBuffer;
+Texture2D g_HalfResGeometryNormalBuffer;
+RWTexture2D<float4> o_OutputBuffer;
+
+SamplerState g_NearestSampler;
+
+uint2 g_BufferDimensions;
+
+float4 Upscale(float2 uv)
+{
+    return 0;
+}
+
+[numthreads(8,8,1)]
+void DepthAwareUpscalingTest(uint3 did : SV_DispatchThreadId)
+{
+	uint2 coord = did.xy;
+	float2 uv = (coord + 0.5) / g_BufferDimensions;
+	
+	float4 res;
+	if (uv.x < 1.0/3.0)
+	{
+		res = g_GeometryNormalBuffer.SampleLevel(g_NearestSampler, uv, 0);
+	}
+	else if (uv.x < 2.0/3.0)
+	{
+		res = Upscale(uv);
+	}
+	else 
+	{
+		res = g_HalfResGeometryNormalBuffer.SampleLevel(g_NearestSampler, uv, 0);
+	}
+
+	o_OutputBuffer[coord] = res;
+}

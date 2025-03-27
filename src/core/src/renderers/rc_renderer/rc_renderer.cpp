@@ -15,6 +15,7 @@
 #include "tone_mapping/tone_mapping.h"
 
 #include "radiance_cascade/rc_technique.h"
+#include "dau_test/dau_technique.h"
 
 namespace Capsaicin
 {
@@ -40,6 +41,7 @@ public:
 	{
 		std::vector<std::unique_ptr<RenderTechnique>> render_techniques;
 		render_techniques.emplace_back(std::make_unique<VisibilityBuffer>());
+        render_techniques.emplace_back(std::make_unique<DAUTechnique>());
         //render_techniques.emplace_back(std::make_unique<SSGI>());
         //render_techniques.emplace_back(std::make_unique<GI10>());
         render_techniques.emplace_back(std::make_unique<RCTechnique>());
