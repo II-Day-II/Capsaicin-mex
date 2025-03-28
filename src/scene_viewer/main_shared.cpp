@@ -84,7 +84,8 @@ static vector<SceneData> const scenes = {
     {     "Cornell Box",                                                   {"assets/LocalTests/cornell.glb"}, true, 1.0f},
     {"Cornell Box - Sphere",                                          {"assets/LocalTests/cornell_ball.glb"}, true, 1.0f},
     {"Cornell Box - Whitefurnace",                                          {"assets/LocalTests/cornell_whitefurnace.glb"}, true, 1.0f},
-    {"ECube",                                                                 {"assets/LocalTests/ECube.glb"}, true, 7.0f},
+    {                     "ECube",                                                                         {"assets/LocalTests/ECube.glb"}, true, 7.0f},
+    {                     "ECubeMonke",                                                                         {"assets/LocalTests/ECubeMonke.glb"}, true, 7.0f},
 };
 
 /** List of supported environment maps */

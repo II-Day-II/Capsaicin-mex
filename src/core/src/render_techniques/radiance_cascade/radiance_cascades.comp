@@ -80,7 +80,7 @@ float IntervalScale(uint cascade_index)
 // TODO: figure out how I want to structure interval lengths. They must be long enough to reach opposing walls, but short enough to not be noticeable at close distances
 float2 GetInterval(uint cascade_index, float base_length)
 {
-    return base_length * float2(IntervalScale(cascade_index), IntervalScale(cascade_index + 1) + 1);
+    return base_length * float2(IntervalScale(cascade_index), IntervalScale(cascade_index + 1) + 0);
     //length(pow(2.0.xx, 0 /*cascade_index*/))); // a little bit of interval overlap, as a treat
 }
 
@@ -322,7 +322,8 @@ float4 TraceInterval(float2 interval, float3 origin, float3 direction, bool is_m
 
 void MergeUpperRadiance(inout float4 t_radiance, float4 traced_radiance, uint2 target_probe_pos, uint2 target_probe_size, uint2 pos_in_target_probe, uint target_dir_index)
 {
-    uint2 upper_probe_size = 2 * target_probe_size;
+    const uint2 upper_probe_size = 2 * target_probe_size;
+    const float2 one_over_res = 1.0 / float2(g_CascadeTexDimensions);
     #if 0 // this makes no discernable difference in quality or correctness
     uint2 nearest_upper_probe = target_probe_pos / 2; // 0,0 -> 0,0; 1,1 -> 0,0; 2,2 -> 1,1 etc. There are half as many probes in cN+1.
     uint2 pos_in_upper_probe = target_probe_pos % 2; // [0,1]
@@ -340,7 +341,42 @@ void MergeUpperRadiance(inout float4 t_radiance, float4 traced_radiance, uint2 t
     uint upper_dir_index = linear_dir_index + target_dir_index;
     uint2 dir_offset = uint2(upper_dir_index % upper_probe_size.x, upper_dir_index / upper_probe_size.x);
     
-    float total_weight = 0.0;
+#if BILATERAL_UPSAMPLING
+    float2 probe_center_uv = (target_probe_pos + 0.5) * target_probe_size * one_over_res;
+    float4 upper_probe_depths = 0;
+    for (uint d = 0; d < 4; d++)
+    {
+        uint2 offset = BilinearOffset(d);
+        uint2 upper_probe_id = upper_probe_tl + offset;
+        
+        float2 upper_probe_center_uv = (upper_probe_id + 0.5) * upper_probe_size * one_over_res; // surely this can't go wrong... (IT'S GOING WRONG)
+        
+        #if PROBE_PLACEMENT == 0
+        float upper_depth = /*LinearizeDepth*/(g_MinMaxDepth.SampleLevel(g_NearestSampler, upper_probe_center_uv, g_cascadeId+1).r); // TODO: Does this need to be linearized??
+        #elif PROBE_PLACEMENT == 1
+        float upper_depth = LinearizeDepth(g_MinMaxDepth.SampleLevel(g_NearestSampler, upper_probe_center_uv, 0).r);
+        #endif
+        upper_probe_depths[d] = upper_depth;
+    }
+    float maxd = hmax(upper_probe_depths);
+    float mind = hmin(upper_probe_depths);
+    float diffd = maxd - mind;
+    float avg = dot(upper_probe_depths, 0.25.xxxx);
+    bool d_edge = (diffd / avg) > 0.001;
+    
+    if (d_edge)
+    {
+        #if PROBE_PLACEMENT == 0
+        float fullres_depth = /*LinearizeDepth*/(g_MinMaxDepth.SampleLevel(g_NearestSampler, probe_center_uv, g_cascadeId+0).r);
+        #elif PROBE_PLACEMENT == 1
+        float fullres_depth = LinearizeDepth(g_MinMaxDepth.SampleLevel(g_NearestSampler, probe_center_uv, 0).r);
+        #endif
+        float4 dd = abs(upper_probe_depths - fullres_depth);
+        weights *= 1.0 / (dd + 0.0001);
+    }
+    weights /= hadd(weights);
+#endif
+    
     float4 merged_radiance = 0.0;
     for (uint i = 0; i < 4; i++) // for each upper probe
     {
@@ -350,48 +386,14 @@ void MergeUpperRadiance(inout float4 t_radiance, float4 traced_radiance, uint2 t
         uint2 sample_texel = upper_probe_start_texel + dir_offset;
         float4 upper_radiance = g_lastCascade_min.Load(int3(sample_texel, 0));
         float weight = weights[i];
-        
-#if BILATERAL_UPSAMPLING 
-        // TODO: min/max here? currently just doing min
-        // TODO: this simply does not work.
-        // TODO: I think I need to linearize depth here, to deal with far geom and skybox having nearly the same depth otherwise
-        float2 one_over_res = 1.0 / float2(g_CascadeTexDimensions);
-        float2 probe_center_uv = (target_probe_pos + 0.5) * target_probe_size * one_over_res;
-        float2 upper_probe_center_uv = (upper_probe_id + 0.5) * upper_probe_size * one_over_res; // surely this can't go wrong
-        
-        // this is actual depth, not minmax
-        #if PROBE_PLACEMENT == 0
-        
-        float current_depth = LinearizeDepth(g_MinMaxDepth.SampleLevel(g_NearestSampler, probe_center_uv, g_cascadeId+1).r);
-        float upper_depth = LinearizeDepth(g_MinMaxDepth.SampleLevel(g_NearestSampler, upper_probe_center_uv, g_cascadeId+2).r);
-        
-        #elif PROBE_PLACEMENT == 1
-        
-        float current_depth = LinearizeDepth(g_MinMaxDepth.SampleLevel(g_NearestSampler, probe_center_uv, 0).r);
-        float upper_depth = LinearizeDepth(g_MinMaxDepth.SampleLevel(g_NearestSampler, upper_probe_center_uv, 0).r);
-        
-        #endif
-        
-        if (upper_depth >= g_far)
-            continue; // don't merge with sky pixels? (this does make a difference, but not enough)
-        //weight *= max(exp(-100 * abs(current_depth - upper_depth)), EPSILON);
-        
-        // <src: https://www.gdcvault.com/play/1667/Mixed-Resolution>
-        weight *= 1.0f / (EPSILON + abs(current_depth - upper_depth)); 
-        
-        float3 curr_normal = g_GeometryNormalBuffer.SampleLevel(g_NearestSampler, probe_center_uv, 0).xyz * 2 - 1;
-        float3 upper_normal = g_GeometryNormalBuffer.SampleLevel(g_NearestSampler, upper_probe_center_uv, 0).xyz * 2 - 1;
-        float normal_weight = pow(max(dot(curr_normal, upper_normal), EPSILON * 100), 10);
-        weight *= normal_weight;
-                    
-#endif
-        
-        merged_radiance += MergeInterval(traced_radiance, upper_radiance) * weight;
-        total_weight += weight;
+               
+        merged_radiance += upper_radiance * weight;
+        //merged_radiance += MergeInterval(traced_radiance, upper_radiance) * weight;
     }
-    merged_radiance /= total_weight;
+
     
-    t_radiance += merged_radiance;
+    t_radiance += MergeInterval(traced_radiance, merged_radiance);
+    //t_radiance += merged_radiance;
 }
 
 float3 index_to_direction(uint d, uint2 dir_counts, uint2 pos_in_probe, uint2 probe_size)
@@ -478,7 +480,7 @@ void TraceCascadesPreAvg4(uint3 did : SV_DispatchThreadID)
             t_radiance += curr_radiance;
         }
     }
-    o_currentCascade_min[coord] = t_radiance * 0.25;
+    o_currentCascade_min[coord] = t_radiance.a != 0.0 && t_radiance.a != 1.0 ? float4(1,0,1,1) : t_radiance * 0.25;
 
 }
 

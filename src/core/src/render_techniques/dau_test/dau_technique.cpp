@@ -53,6 +53,11 @@ void DAUTechnique::render([[maybe_unused]] CapsaicinInternal &capsaicin) noexcep
     }
     gfxCommandClearTexture(gfx_, dau_output_tex);
     gfxCommandClearTexture(gfx_, halfres_tex);
+    gfxCommandClearTexture(gfx_, halfres_depth);
+
+    gfxCommandBindKernel(gfx_, halfres_depth_blit_kernel);
+    gfxProgramSetParameter(gfx_, blit_program, "ColorBuffer", capsaicin.getAOVBuffer("VisibilityDepth"));
+    gfxCommandDraw(gfx_, 3);
 
     //gfxCommandCopyTexture(gfx_, halfres_tex, capsaicin.getAOVBuffer("GeometryNormal")); // TODO: this but allowing resizing...
     gfxCommandBindKernel(gfx_, halfres_blit_kernel);
@@ -70,9 +75,14 @@ void DAUTechnique::render([[maybe_unused]] CapsaicinInternal &capsaicin) noexcep
         gfxCommandBindKernel(gfx_, dau_kernel);
         gfxProgramSetParameter(gfx_, dau_program, "g_BufferDimensions", buffer_dimensions);
         gfxProgramSetParameter(gfx_, dau_program, "g_DepthBuffer", capsaicin.getAOVBuffer("VisibilityDepth"));
+        gfxProgramSetParameter(gfx_, dau_program, "g_HalfResDepthBuffer", halfres_depth);
         gfxProgramSetParameter(gfx_, dau_program, "g_GeometryNormalBuffer", capsaicin.getAOVBuffer("GeometryNormal"));
         gfxProgramSetParameter(gfx_, dau_program, "g_HalfResGeometryNormalBuffer", halfres_tex);
         gfxProgramSetParameter(gfx_, dau_program, "o_OutputBuffer", dau_output_tex);
+        gfxProgramSetParameter(gfx_, dau_program, "g_NearestSampler", capsaicin.getNearestSampler());
+        gfxProgramSetParameter(gfx_, dau_program, "g_LinearSampler", capsaicin.getLinearSampler());
+        gfxProgramSetParameter(gfx_, dau_program, "g_near", capsaicin.getCamera().nearZ);
+        gfxProgramSetParameter(gfx_, dau_program, "g_near", capsaicin.getCamera().farZ);
         gfxCommandDispatch(gfx_, dispatch_size.x, dispatch_size.y, 1);
     }
 
@@ -143,9 +153,13 @@ bool DAUTechnique::initKernel(CapsaicinInternal const& capsaicin) noexcept
     GfxDrawState halfres_draw_state;
     gfxDrawStateSetColorTarget(halfres_draw_state, 0, halfres_tex);
     halfres_blit_kernel  = gfxCreateGraphicsKernel(gfx_, blit_program, halfres_draw_state);
+    GfxDrawState halfres_depth_state;
+    gfxDrawStateSetColorTarget(halfres_depth_state, 0, halfres_depth);
+    halfres_depth_blit_kernel = gfxCreateGraphicsKernel(gfx_, blit_program, halfres_depth_state);
     GfxDrawState debug_draw_state;
     gfxDrawStateSetColorTarget(debug_draw_state, 0, capsaicin.getAOVBuffer("Debug"));
     debug_blit_kernel = gfxCreateGraphicsKernel(gfx_, blit_program, debug_draw_state);
+
 
     return !!dau_program && !!blit_program;
 }
@@ -155,6 +169,7 @@ bool DAUTechnique::initTextures(CapsaicinInternal const& capsaicin) noexcept
     capsaicin;
     dau_output_tex = gfxCreateTexture2D(gfx_, capsaicin.getWidth(), capsaicin.getHeight(), capsaicin.getAOVBuffer("GeometryNormal").getFormat());
     halfres_tex = gfxCreateTexture2D(gfx_, capsaicin.getWidth() / 2, capsaicin.getHeight() / 2, capsaicin.getAOVBuffer("GeometryNormal").getFormat());
+    halfres_depth = gfxCreateTexture2D(gfx_, capsaicin.getWidth() / 2, capsaicin.getHeight() / 2, capsaicin.getAOVBuffer("VisibilityDepth").getFormat());
     return !!dau_output_tex && !!halfres_tex;
 }
 

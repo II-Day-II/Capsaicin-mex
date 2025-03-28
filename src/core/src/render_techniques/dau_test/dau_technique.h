@@ -81,9 +81,11 @@ protected:
     GfxKernel     dau_kernel;
     GfxProgram    blit_program;
     GfxKernel     halfres_blit_kernel;
+    GfxKernel     halfres_depth_blit_kernel;
     GfxKernel     debug_blit_kernel;
 
     GfxTexture halfres_tex;
+    GfxTexture halfres_depth;
     GfxTexture dau_output_tex;
 
 };

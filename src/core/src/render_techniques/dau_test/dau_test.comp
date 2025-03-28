@@ -1,16 +1,72 @@
 
+#include "../../math/math.hlsl"
+
 Texture2D g_GeometryNormalBuffer;
 Texture2D g_DepthBuffer;
 Texture2D g_HalfResGeometryNormalBuffer;
+Texture2D g_HalfResDepthBuffer;
 RWTexture2D<float4> o_OutputBuffer;
 
 SamplerState g_NearestSampler;
+SamplerState g_LinearSampler;
 
 uint2 g_BufferDimensions;
 
+// depth remapping
+float g_near;
+float g_far;
+
+float LinearizeDepth(float depth)
+{
+    const float near = g_near;
+    const float far = g_far;
+    float ndcz = 2.0 * depth - 1.0;
+    return (2.0 * near * far) / (far + near - ndcz * (far - near));
+}
+
+#define BILATERAL 1 // 0 -> bilinear, 1 -> bilateral
+
 float4 Upscale(float2 uv)
 {
-    return 0;
+	// get bilinear data
+    uint3 halfres_dims;
+    g_HalfResGeometryNormalBuffer.GetDimensions(0, halfres_dims.x, halfres_dims.y, halfres_dims.z);
+    float2 base_coord = (uv * halfres_dims.xy) - 0.5;
+    float2 ratio = frac(base_coord);
+    uint2 base_idx = floor(base_coord);
+    float4 w = float4(ratio, 1 - ratio);
+    float4 weights = w.zxzx * w.wwyy;
+    const uint2 offsets[4] = { uint2(0, 0), uint2(1, 0), uint2(0, 1), uint2(1, 1) };
+    float4 color = 0;
+    
+#if BILATERAL
+    float4 depths = 0;
+    for (uint d = 0; d < 4; d++)
+    {
+        depths[d] = (g_HalfResDepthBuffer.Load(int3(base_idx + offsets[d], 0)).r);
+    }
+    float maxd = hmax(depths);
+    float mind = hmin(depths);
+    float diffd = maxd - mind;
+    float avg = dot(depths, 0.25.xxxx);
+    bool d_edge = (diffd / avg) > 0.0001; // this threshold is very sensitive
+    
+    if (d_edge)
+    {
+        float fullres_depth = (g_DepthBuffer.SampleLevel(g_LinearSampler, uv, 0).r);
+        float4 dd = abs(depths - fullres_depth);
+        weights *= 1.0 / (dd+0.0001);
+    }
+    weights /= hadd(weights);
+#endif
+    
+    for (uint i = 0; i < 4; i++)
+    {
+        uint2 bilin_texel = base_idx + offsets[i];
+        color += g_HalfResGeometryNormalBuffer.Load(int3(bilin_texel, 0)) * weights[i];
+    }
+    return color;
+        return 0;
 }
 
 [numthreads(8,8,1)]
@@ -19,19 +75,35 @@ void DepthAwareUpscalingTest(uint3 did : SV_DispatchThreadId)
 	uint2 coord = did.xy;
 	float2 uv = (coord + 0.5) / g_BufferDimensions;
 	
-	float4 res;
-	if (uv.x < 1.0/3.0)
+    float4 res = float4(0,0,0,1);
+	if (uv.x < 1.0/4.0)
 	{
 		res = g_GeometryNormalBuffer.SampleLevel(g_NearestSampler, uv, 0);
 	}
-	else if (uv.x < 2.0/3.0)
+	else if (uv.x < 2.0/4.0)
 	{
 		res = Upscale(uv);
 	}
-	else 
+	else if (uv.x < 3.0 / 4.0)
 	{
-		res = g_HalfResGeometryNormalBuffer.SampleLevel(g_NearestSampler, uv, 0);
+        res = g_HalfResGeometryNormalBuffer.SampleLevel(g_LinearSampler, uv, 0);
 	}
-
-	o_OutputBuffer[coord] = res;
+    else
+    {
+		//res.xyz = g_HalfResDepthBuffer.SampleLevel(g_NearestSampler, uv, 0).rrr;
+		res = g_HalfResGeometryNormalBuffer.SampleLevel(g_NearestSampler, uv, 0);
+    }
+	#define SEPARATOR_WIDTH 0.0003
+    #define SEPARATOR_POS(i) abs(uv.x - i / 4.0)
+    if (SEPARATOR_POS(1.0) < SEPARATOR_WIDTH || SEPARATOR_POS(2.0) < SEPARATOR_WIDTH || SEPARATOR_POS(3.0) < SEPARATOR_WIDTH)
+        res = 0;
+    if (uv.x > 0.0 && uv.x < 0.5 && uv.y > 0.0 && uv.y < 0.5)
+    {
+        res = abs(Upscale(uv) - g_GeometryNormalBuffer.SampleLevel(g_NearestSampler, uv, 0));
+    }
+    if (uv.x > 0.5 && uv.y > 0.5)
+    {
+        res = abs(g_HalfResGeometryNormalBuffer.SampleLevel(g_NearestSampler, uv, 0) - g_HalfResGeometryNormalBuffer.SampleLevel(g_LinearSampler, uv, 0));
+    }
+    o_OutputBuffer[coord] = res;
 }

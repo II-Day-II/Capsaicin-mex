@@ -63,6 +63,7 @@ protected:
         CornellSphere,
         CornellLight,
         ECube,
+        ECubeMonke,
     };
 
     enum class EnvironmentMap : uint32_t

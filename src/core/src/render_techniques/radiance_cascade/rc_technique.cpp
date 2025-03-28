@@ -335,7 +335,7 @@ void RCTechnique::renderGUI([[maybe_unused]] CapsaicinInternal &capsaicin) const
     ImGui::SliderInt("Num cascades", &capsaicin.getOption<int>("rc_cascade_count"), 0, 6);
     ImGui::Checkbox("Render single cascade only", &capsaicin.getOption<bool>("rc_single_cascade_only"));
     ImGui::SliderFloat(
-        "C0 ray length", &capsaicin.getOption<float>("rc_c0_length"), 0.0000001f, 1.0f, "%.7f", ImGuiSliderFlags_Logarithmic);
+        "C0 ray length", &capsaicin.getOption<float>("rc_c0_length"), 0.0000001f, 100.0f, "%.7f", ImGuiSliderFlags_Logarithmic);
     
     char const *preavg_labels[] = {"OFF", "4", "16"};
     ImGui::Combo("Use Preaveraging", &capsaicin.getOption<int>("rc_preaveraging"),
