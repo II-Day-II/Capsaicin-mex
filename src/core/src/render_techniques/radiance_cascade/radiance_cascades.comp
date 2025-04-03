@@ -80,7 +80,7 @@ float IntervalScale(uint cascade_index)
 // TODO: figure out how I want to structure interval lengths. They must be long enough to reach opposing walls, but short enough to not be noticeable at close distances
 float2 GetInterval(uint cascade_index, float base_length)
 {
-    return base_length * float2(IntervalScale(cascade_index), IntervalScale(cascade_index + 1) + 0);
+    return base_length * float2(IntervalScale(cascade_index), IntervalScale(cascade_index + 1) + 1);
     //length(pow(2.0.xx, 0 /*cascade_index*/))); // a little bit of interval overlap, as a treat
 }
 
@@ -324,7 +324,7 @@ void MergeUpperRadiance(inout float4 t_radiance, float4 traced_radiance, uint2 t
 {
     const uint2 upper_probe_size = 2 * target_probe_size;
     const float2 one_over_res = 1.0 / float2(g_CascadeTexDimensions);
-    #if 0 // this makes no discernable difference in quality or correctness
+    #if 1 // this makes no discernable difference in quality or correctness
     uint2 nearest_upper_probe = target_probe_pos / 2; // 0,0 -> 0,0; 1,1 -> 0,0; 2,2 -> 1,1 etc. There are half as many probes in cN+1.
     uint2 pos_in_upper_probe = target_probe_pos % 2; // [0,1]
     uint2 upper_probe_tl = nearest_upper_probe - (1 - pos_in_upper_probe); 
@@ -339,7 +339,8 @@ void MergeUpperRadiance(inout float4 t_radiance, float4 traced_radiance, uint2 t
     
     uint linear_dir_index = (pos_in_target_probe.x + pos_in_target_probe.y * target_probe_size.x) * 4;
     uint upper_dir_index = linear_dir_index + target_dir_index;
-    uint2 dir_offset = uint2(upper_dir_index % upper_probe_size.x, upper_dir_index / upper_probe_size.x);
+    //uint2 dir_offset = uint2(upper_dir_index % upper_probe_size.x, upper_dir_index / upper_probe_size.x);
+    uint2 dir_offset = BilinearOffset(target_dir_index) + 2 * pos_in_target_probe;
     
 #if BILATERAL_UPSAMPLING
     float2 probe_center_uv = (target_probe_pos + 0.5) * target_probe_size * one_over_res;
@@ -367,14 +368,14 @@ void MergeUpperRadiance(inout float4 t_radiance, float4 traced_radiance, uint2 t
     if (true)
     {
         #if PROBE_PLACEMENT == 0
-        float fullres_depth = /*LinearizeDepth*/(g_MinMaxDepth.SampleLevel(g_NearestSampler, probe_center_uv, g_cascadeId+0).r);
+        float fullres_depth = /*LinearizeDepth*/(g_MinMaxDepth.SampleLevel(g_NearestSampler, probe_center_uv, g_cascadeId).r);
         #elif PROBE_PLACEMENT == 1
         float fullres_depth = LinearizeDepth(g_MinMaxDepth.SampleLevel(g_NearestSampler, probe_center_uv, 0).r);
         #endif
         float4 dd = abs(upper_probe_depths - fullres_depth);
         weights *= 1.0 / (dd + 0.0001);
     }
-    weights /= hadd(weights);
+    weights /= hadd(weights); // normalize so total is 1
 #endif
     
     float4 merged_radiance = 0.0;

@@ -457,29 +457,38 @@ def idx2dir(d, dir_counts, pip, probe_size):
     offset = index_to_uv_offset(d, dir_counts)
     uv = (pip + 0.5 + offset) / probe_size
     uv = uv * 2 - 1
+    # return uv
     return oct_decode(uv.x, uv.y)
 
 def merge_targets(src_pos, probe_size, pip, d):
     ret = []
-    ups = 2 * probe_size
-    nup = src_pos // 2
-    piup = vec2(src_pos.x % 2, src_pos.y % 2)
-    uptl = nup - (vec2(1,1) - piup)
-    ldi = (pip.x + pip.y * probe_size) * 4
-    udi = ldi + d
-    do = vec2(udi % ups, udi // ups)
-    return uptl * ups + do
-    # for i in range(4):
-    #     offset = (vec2(0,0), vec2(1,0), vec2(0,1), vec2(1,1))[i]
-    #     upid = uptl + offset
-    #     upst = upid * ups
-    #     st = upst + do
-    #     ret.append(st)
-    # return ret
+    ups = probe_size * 2
+    
+    # nup = src_pos // 2
+    # piup = vec2(src_pos.x % ups, src_pos.y % ups)
+    # uptl = nup - (vec2(1,1) - piup)
+
+    uptl = (((src_pos + 0.5) * probe_size) / ups - 0.5) // 1
+
+    ldi = (pip.x + pip.y * probe_size) * 4 # -> [0,4,8,12]
+    udi = ldi + d # [0,1,2,3|4,5,6,7|8,9,10,11|12,13,14,15]
+    # have: [00,10,20,30|01,11,12,13|02,12,22,23|03,13,23,33]
+    do = vec2(udi % ups, udi // ups) 
+    # want: [00,10,01,11|20,30,21,31|02,12,03,13|22,32,23,33]
+    do = (vec2(0,0), vec2(1,0), vec2(0,1), vec2(1,1))[d] + pip * 2 
+    # return uptl * ups + do
+    for i in range(4):
+        offset = (vec2(0,0), vec2(1,0), vec2(0,1), vec2(1,1))[i]
+        upid = uptl + offset
+        upst = upid * ups
+        st = upst + do
+        ret.append(st)
+    return ret
 
 
 def do_single_probe(cascade_idx):
     probe_size = 1 << (cascade_idx + 1)
+    upper_probe_size = probe_size * 2
     probe = [] # [[(t, [m;4]);4];ps*ps]
     for x in range(probe_size):
         for y in range(probe_size):
@@ -487,28 +496,37 @@ def do_single_probe(cascade_idx):
             probe_dirs = []
             for d in range(4):
                 direction = idx2dir(d, vec2(2,2), pip, probe_size)
-                mt = merge_targets(vec2(824, 510), probe_size, pip, d)
-                merge_dirs = [idx2dir(md, vec2(2,2), vec2(mt.x % (probe_size*2), mt.y % (probe_size*2)), probe_size*2) for md in range(4)]
+                mt = merge_targets(vec2(probe_size,probe_size), probe_size, pip, d)[0]
+                pos_in_upper_probe = vec2(mt.x % upper_probe_size, mt.y % upper_probe_size)
+                merge_dirs = [idx2dir(md, vec2(2,2), pos_in_upper_probe, upper_probe_size) for md in range(4)]
                  
                 probe_dirs.append((direction, merge_dirs))
             probe.append(probe_dirs)
     colors = ["red",      "lime",      "blue", "black", 
-              "deeppink", "yellow",    "cyan", "grey"]
+              "deeppink", "green",     "cyan", "grey"]
     fig = plt.figure()
     for g in range(probe_size*probe_size):
         ax = fig.add_subplot(probe_size, probe_size, 1+g, projection="3d")
+        # ax = fig.add_subplot(probe_size, probe_size, 1+g)
         boundsx = (-1, -1, -1, -1,  1,  1,  1,  1)
         boundsy = (-1, -1,  1,  1, -1, -1,  1,  1)
         boundsz = (-1,  1, -1,  1, -1,  1, -1,  1)
         ax.scatter(boundsx, boundsy, boundsz, c="white")
+        # ax.scatter(boundsx, boundsy, c="white")
         ax.set_aspect("equal")
         for d in range(4):
             target, merges = probe[g][d]
             ax.scatter(*target, c=colors[d])
+            # ax.scatter(target.x, target.y, c=colors[d])
             for m in merges:
                 ax.scatter(*m, c=colors[d+4])
+                # ax.scatter(m.x, m.y, c=colors[d+4])
     
     plt.show()
 
-
+ps = 2
+coord = vec2(ps,ps)
+pos = coord // ps
+pip = vec2(coord.x % ps, coord.y % ps)
+print(list(map(str,merge_targets(pos, ps, pip, 0))))
 do_single_probe(1)
