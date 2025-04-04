@@ -129,7 +129,7 @@ TwoPos GetRayOriginDepthAware(float2 probe_uv, float3 normal, uint cascade_index
     float depth = min_max_depth.r;
     
     float4x4 transform = g_ViewProjectionInverse;
-    float3 scaled_normal = normal * 1.0; // wtf is this (avoid self intersections)
+    float3 scaled_normal = normal * 1; // wtf is this (avoid self intersections)
     float3 world_min = transformPointProjection(float3(2.0f.xx * float2(probe_uv.x, 1.0f - probe_uv.y) - 1.0f.xx, depth), transform); // this causes probes at c4+ in the lower half of the grid to spawn under the floor...
     float3 origin_min = offsetPosition(world_min, scaled_normal);
     depth = min_max_depth.g;
@@ -249,7 +249,7 @@ inline float3 oct_decode(const float2 e)
 #define BILATERAL_UPSAMPLING 1
 #define MERGE_DIR_FIRST 0 // doesn't matter for bilinear, but bilateral has an effect here (no effect when preaveraging)
 #define SPHERE_MAP_MODE 2 // 0 -> costheta, 1 -> octahedral, 2 -> octahedral (equal area)
-#define PROBE_PLACEMENT 0 // 0 -> depth aware, 1 -> probe center
+#define PROBE_PLACEMENT 0 // 0 -> depth aware, 1 -> probe center // depth aware has issues with depth sensitive leakage
 
 #define EPSILON 0.00001
 
@@ -314,7 +314,7 @@ float4 TraceInterval(float2 interval, float3 origin, float3 direction, bool is_m
 #else
         curr_radiance.rgb = g_EnvironmentBuffer.SampleLevel(g_TextureSampler, ray.Direction, 0.0).rgb * 1.0;
 #endif
-        curr_radiance.a = 0;
+        curr_radiance.a = 0; // this prevents propagating cMax sky samples when lower cascades' partially occluded ray groups merge with cMax
     }
 #endif
     return curr_radiance;
@@ -378,23 +378,23 @@ void MergeUpperRadiance(inout float4 t_radiance, float4 traced_radiance, uint2 t
     weights /= hadd(weights); // normalize so total is 1
 #endif
     
-    float4 merged_radiance = 0.0;
+    float4 upper_radiance = 0.0;
     for (uint i = 0; i < 4; i++) // for each upper probe
     {
         uint2 offset = BilinearOffset(i);
         uint2 upper_probe_id = upper_probe_tl + offset;
         uint2 upper_probe_start_texel = upper_probe_id * upper_probe_size;
         uint2 sample_texel = upper_probe_start_texel + dir_offset;
-        float4 upper_radiance = g_lastCascade_min.Load(int3(sample_texel, 0));
+        float4 upper_probe_radiance = g_lastCascade_min.Load(int3(sample_texel, 0));
         float weight = weights[i];
                
-        merged_radiance += upper_radiance * weight;
-        //merged_radiance += MergeInterval(traced_radiance, upper_radiance) * weight;
+        //upper_radiance.rgb += upper_probe_radiance.rgb * weight;
+        //upper_radiance.a += upper_probe_radiance.a * 0.25;
+        upper_radiance += upper_probe_radiance * weight;
     }
 
     
-    t_radiance += MergeInterval(traced_radiance, merged_radiance);
-    //t_radiance += merged_radiance;
+    t_radiance += MergeInterval(traced_radiance, upper_radiance);
 }
 
 float3 index_to_direction(uint d, uint2 dir_counts, uint2 pos_in_probe, uint2 probe_size)
@@ -584,10 +584,14 @@ void DebugInfo(uint3 did)
     const float2 probe_center_uv = probe_center * one_over_res; // [0, 1] uv coordinate of this probe's center (the difference to uv = coord/res is tiiiiiny)
   
     
-    const float2 mmd = g_MinMaxDepth.SampleLevel(g_NearestSampler, probe_center_uv, cascade_index +1).rg;
-    const float2 mmd2 = g_MinMaxDepth.SampleLevel(g_NearestSampler, probe_center_uv, cascade_index).rg;
-    const float2 depth_diff = abs(mmd - mmd2);
-    o_currentCascade_min[coord] = float4(depth_diff.rrr * 100, 1);
+    //const float2 mmd = g_MinMaxDepth.SampleLevel(g_NearestSampler, probe_center_uv, cascade_index +1).rg;
+    //const float2 mmd2 = g_MinMaxDepth.SampleLevel(g_NearestSampler, probe_center_uv, cascade_index).rg;
+    //const float2 depth_diff = abs(mmd - mmd2);
+    const float3 probe_normal = g_GeometryNormalBuffer.SampleLevel(g_NearestSampler, probe_center_uv, 0).rgb * 2 - 1;
+    const float3 oda = GetRayOriginDepthAware(probe_center_uv, probe_normal, 0).near;
+    const float3 ori = GetRayOrigin(probe_center_uv, probe_normal);
+    const float3 diff = abs(ori - oda);
+    o_currentCascade_min[coord] = float4(diff * 1, 1);
 }
 
 [numthreads(8,8,1)]
@@ -785,7 +789,7 @@ RWTexture2D<float4> o_finalCascadeUpscaled_max;
 void AverageFinalCascade(uint3 did : SV_DispatchThreadID) // averages each 2x2 probe in c0
 {
     const uint2 coord = did.xy;
-    const uint2 c0_probe_size = 2; 
+    const uint2 c0_probe_size = 1; 
     const uint2 probe_id = coord / c0_probe_size; // assuming 1 probe every 2 pixels in c0
     const uint2 read = probe_id * c0_probe_size;
     float4 total = 0;
@@ -799,5 +803,5 @@ void AverageFinalCascade(uint3 did : SV_DispatchThreadID) // averages each 2x2 p
             total += g_finalCascade_min.Load(int3(pos, 0));
         }
     }
-    o_finalCascadeUpscaled_min[coord] = total * 0.25; 
+    o_finalCascadeUpscaled_min[coord] = total / (c0_probe_size.x*c0_probe_size.y);
 }
