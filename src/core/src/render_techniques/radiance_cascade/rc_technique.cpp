@@ -99,7 +99,9 @@ void RCTechnique::render([[maybe_unused]] CapsaicinInternal &capsaicin) noexcept
         gfxDestroyTexture(gfx_, minmax_depth);
         [[maybe_unused]]uint32_t mmdepth_width = nearest_pow_2(capsaicin.getWidth());
         [[maybe_unused]]uint32_t mmdepth_height = nearest_pow_2(capsaicin.getHeight());
-        minmax_depth = gfxCreateTexture2D(gfx_, rc_probes[0].min.getWidth(), rc_probes[0].min.getHeight(), DXGI_FORMAT_R32G32_FLOAT, newOptions.rc_cascade_count + 2);
+        uint                      mip_count      = newOptions.rc_cascade_count + 3;
+            //(uint)glm::floor(glm::log2(glm::max((float)rc_probes[0].min.getWidth(), (float)rc_probes[0].min.getHeight()))); // fuck it we ball, always get max mips
+        minmax_depth = gfxCreateTexture2D(gfx_, rc_probes[0].min.getWidth(), rc_probes[0].min.getHeight(), DXGI_FORMAT_R32G32_FLOAT, mip_count);
         //minmax_depth = gfxCreateTexture2D(gfx_, mmdepth_width, mmdepth_height, DXGI_FORMAT_R32G32_FLOAT, newOptions.rc_cascade_count + 2);
 
         minmax_depth.setName(texNames[2]);
@@ -146,7 +148,7 @@ void RCTechnique::render([[maybe_unused]] CapsaicinInternal &capsaicin) noexcept
         }
     }
 
-
+    gfxProgramSetParameter(gfx_, rc_program, "g_VisibilityDepth", capsaicin.getAOVBuffer("VisibilityDepth"));
 
     gfxProgramSetParameter(gfx_, rc_program, "g_BufferDimensions", buffer_dimensions);
     uint2 cascade_dimensions = buffer_dimensions / 2u;
@@ -392,8 +394,11 @@ bool RCTechnique::initTextures(CapsaicinInternal const& capsaicin) noexcept
     }
     [[maybe_unused]]const uint32_t mmdepth_width = nearest_pow_2(capsaicin.getWidth());
     [[maybe_unused]]const uint32_t mmdepth_height = nearest_pow_2(capsaicin.getHeight());
-    //minmax_depth = gfxCreateTexture2D(gfx_, capsaicin.getWidth(), capsaicin.getHeight(), DXGI_FORMAT_R32G32_FLOAT, capsaicin.getOption<int>("rc_cascade_count")+2);
-    minmax_depth = gfxCreateTexture2D(gfx_, mmdepth_width, mmdepth_height, DXGI_FORMAT_R32G32_FLOAT, capsaicin.getOption<int>("rc_cascade_count")+2);
+    uint                            mip_count      = capsaicin.getOption<int>("rc_cascade_count") + 3;
+        //(uint)glm::floor(glm::log2(glm::max((float)rc_probes[0].min.getWidth(), (float)rc_probes[0].min.getHeight()))); // fuck it we ball, always get max mips (BAD idea for perf)
+
+    //minmax_depth = gfxCreateTexture2D(gfx_, capsaicin.getWidth(), capsaicin.getHeight(), DXGI_FORMAT_R32G32_FLOAT, mip_count);
+    minmax_depth = gfxCreateTexture2D(gfx_, mmdepth_width, mmdepth_height, DXGI_FORMAT_R32G32_FLOAT, mip_count);
     minmax_depth.setName(texNames[2]);
 
     return !!minmax_depth && !!rc_probes[0].max;
