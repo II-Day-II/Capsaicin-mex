@@ -598,41 +598,31 @@ void DebugInfo(uint3 did)
     // get ray origin for this probe // TODO: different probes on min/max of depth buffer in this probe_position
     probe_normal = normalize(2.0 * probe_normal - 1.0); // using this to offset the position, still getting self intersections...?
     const float2 probe_depths = g_MinMaxDepth.SampleLevel(g_NearestSampler, probe_center_uv, g_cascadeId + 1).rg;
-    const float3 origin = GetRayOriginDepthAware(probe_center_uv, probe_normal, probe_depths * 1).near; // TODO: BUG: this gets us a bunch of stripes...? some resolution dependency with depth and probe textures, and weird self intersections. Depends on ray length??
+    float3 origin = GetRayOriginDepthAware(probe_center_uv, probe_normal, probe_depths).near; // TODO: BUG: this gets us a bunch of stripes...? some resolution dependency with depth and probe textures, and weird self intersections. Depends on ray length??
 
     const float3 origin2 = GetRayOrigin(probe_center_uv, probe_normal);
     
     float4 t_radiance = 0;
     uint d = 0;
-    float3 direction = normalize(float3(-1, 1, -1)); //index_to_direction(d, uint2(2, 2), pos_in_probe, probe_size);
-    direction = normalize(origin - g_Eye);
-    float4 curr_radiance = float4(0, 0, 0, 1);
-    RayDesc ray;
-    ray.Direction = direction;
-    ray.Origin = origin;
-    ray.TMin = interval.x;
-    ray.TMax = interval.y;
+    float3 direction = normalize(float3(0, 0, 1)); //index_to_direction(d, uint2(2, 2), pos_in_probe, probe_size);
+    //direction = normalize(origin - g_Eye);
     
-    ClosestRayQuery query = TraceRay < ClosestRayQuery > (ray);
-    if (query.CommittedStatus() != COMMITTED_NOTHING) // ray hit something
+    float3 ray_start = origin + direction * interval.x;
+    float3 ray_start2 = origin2 + direction * interval.x;
+    origin = ray_start;
+    
+    float wallz = 0; //-1.04;
+    float3 f = 0;
+    if (false || abs(origin.z - wallz) < 0.05)
     {
-        float t = query.CommittedRayT();
-        HitInfo hit = GetHitInfoRtInlineCommitted(query);
-        curr_radiance.rgb = t.rrr;
-        curr_radiance.a = 0;
+        f = (wallz - origin.z);
+        f = select(f > 0, float3(0, 1, 0), float3(1,0,0));
     }
     else
     {
-        curr_radiance.rgb = float3(1, 0, 1);
+        f = origin;
     }
-    t_radiance.rgb += curr_radiance.rgb;
-    float wallz = -1.025;
-    float3 f = 0;
-    if (abs(origin.z - wallz) < 0.0125)
-    {
-        f = (wallz - origin.z);
-    }
-    o_currentCascade_min[coord] = float4(10 * f, 1);
+    o_currentCascade_min[coord] = float4(f, 1);
 }
 
 [numthreads(8,8,1)]

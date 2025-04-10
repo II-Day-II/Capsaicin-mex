@@ -1125,6 +1125,10 @@ void CapsaicinInternal::render()
                 camera_matrices_[i].view = glm::mat4(view);
                 glm::dmat4 projection    = glm::perspective(
                     (double)camera.fovY, (double)camera.aspect, (double)camera.nearZ, (double)camera.farZ);
+                
+                /*glm::dmat4 ortho         = glm::ortho(-camera.aspect, camera.aspect, -1.0f, 1.0f, camera.nearZ, camera.farZ);
+                projection                              = ortho;*/
+
                 projection[2][0]                        = camera_jitter_x_;
                 projection[2][1]                        = camera_jitter_y_;
                 camera_matrices_[i].projection          = glm::mat4(projection);

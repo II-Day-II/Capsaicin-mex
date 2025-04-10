@@ -504,9 +504,17 @@ def do_single_probe(cascade_idx):
             probe.append(probe_dirs)
     colors = ["red",      "lime",      "blue", "black", 
               "deeppink", "green",     "cyan", "grey"]
+    def colorfrom3tup(x):
+        x = list(map(lambda e: e * 0.5 + 0.5, x))
+        r = int(x[0] * 255)
+        g = int(x[1] * 255)
+        b = int(x[2] * 255)
+        return f"#{r:02X}{g:02X}{b:02X}"
+    colors2 = [colorfrom3tup(probe[g][d][0]) for g in range(probe_size * probe_size) for d in range(4)]
     fig = plt.figure()
+    ax = fig.add_subplot(111, projection="3d")
     for g in range(probe_size*probe_size):
-        ax = fig.add_subplot(probe_size, probe_size, 1+g, projection="3d")
+        # ax = fig.add_subplot(probe_size, probe_size, 1+g, projection="3d")
         # ax = fig.add_subplot(probe_size, probe_size, 1+g)
         boundsx = (-1, -1, -1, -1,  1,  1,  1,  1)
         boundsy = (-1, -1,  1,  1, -1, -1,  1,  1)
@@ -516,10 +524,12 @@ def do_single_probe(cascade_idx):
         ax.set_aspect("equal")
         for d in range(4):
             target, merges = probe[g][d]
-            ax.scatter(*target, c=colors[d])
+            # ax.scatter(*target, c=colors[d])
+            ax.scatter(*target, c=colors2[g*4+d])
             # ax.scatter(target.x, target.y, c=colors[d])
             for m in merges:
-                ax.scatter(*m, c=colors[d+4])
+                # ax.scatter(*m, c=colors[d+4])
+                ax.scatter(*m, c=colors2[g*4+d])
                 # ax.scatter(m.x, m.y, c=colors[d+4])
     
     plt.show()
@@ -529,4 +539,4 @@ coord = vec2(ps,ps)
 pos = coord // ps
 pip = vec2(coord.x % ps, coord.y % ps)
 print(list(map(str,merge_targets(pos, ps, pip, 0))))
-do_single_probe(1)
+do_single_probe(0)
