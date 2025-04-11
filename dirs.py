@@ -452,6 +452,10 @@ def oct_decode(ex, ey):
 # plt.show()
 
 
+def idx2uv(d, dir_counts, pip, probe_size):
+    offset = index_to_uv_offset(d, dir_counts)
+    uv = (pip + 0.5 + offset) / probe_size
+    return uv
 
 def idx2dir(d, dir_counts, pip, probe_size):
     offset = index_to_uv_offset(d, dir_counts)
@@ -534,9 +538,25 @@ def do_single_probe(cascade_idx):
     
     plt.show()
 
-ps = 2
-coord = vec2(ps,ps)
-pos = coord // ps
-pip = vec2(coord.x % ps, coord.y % ps)
-print(list(map(str,merge_targets(pos, ps, pip, 0))))
-do_single_probe(0)
+def show_uvs():
+    probe_size = 2
+    probe = [] # [[u, v; 4]; ps*ps]
+    for x in range(probe_size):
+        for y in range(probe_size):
+            pip = vec2(x, y)
+            probe_uvs = []
+            for d in range(4):
+                uv = idx2uv(d, vec2(2,2), pip, probe_size)
+                probe_uvs.append(uv)
+            probe.append(probe_uvs)
+    fig = plt.figure()
+    ax = fig.add_subplot(111)
+    # flat = [i for g in [(uv.x, uv.y, f"#{int(255*uv.x):02X}{int(255*uv.y):02X}00") for d in probe for uv in d] for i in g]
+    xs = [uv.x for d in probe for uv in d]
+    ys = [uv.y for d in probe for uv in d]
+    cs = [f"#{int(255*uv.x):02X}{int(255*uv.y):02X}00" for d in probe for uv in d]
+    ax.scatter(xs, ys, c=cs)
+    # ax.scatter(flat[0::3], flat[1::3], c=flat[2::3])
+    plt.show()
+show_uvs()
+# do_single_probe(0)

@@ -317,6 +317,11 @@ float4 TraceInterval(float2 interval, float3 origin, float3 direction, bool is_m
         curr_radiance.a = 0; // this prevents propagating cMax sky samples when lower cascades' partially occluded ray groups merge with cMax
     }
 #endif
+    // this is the hackest hack i've ever done
+    if (direction.z == 0)
+    {
+        curr_radiance.a = 0; // axis aligned ray will never hit axis aligned wall
+    }
     return curr_radiance;
 }
 
