@@ -130,7 +130,7 @@ TwoPos GetRayOriginDepthAware(float2 probe_uv, float3 normal, float2 probe_depth
     float depth = min_max_depth.r;
     
     float4x4 transform = g_ViewProjectionInverse;
-    float3 scaled_normal = normal * 1; // wtf is this (avoid self intersections)
+    float3 scaled_normal = normal * 1;// 34.5; // wtf is this (avoid self intersections) (34.5 is minimum for sponza??)
     float3 world_min = transformPointProjection(float3(2.0f.xx * float2(probe_uv.x, 1.0f - probe_uv.y) - 1.0f.xx, depth), transform);
     float3 origin_min = offsetPosition(world_min, scaled_normal);
     depth = min_max_depth.g;
@@ -318,10 +318,10 @@ float4 TraceInterval(float2 interval, float3 origin, float3 direction, bool is_m
     }
 #endif
     // this is the hackest hack i've ever done
-    if (direction.z == 0)
-    {
-        curr_radiance.a = 0; // axis aligned ray will never hit axis aligned wall
-    }
+//    if (direction.z == 0)
+//    {
+//        curr_radiance.a = 0; // axis aligned ray will never hit axis aligned wall
+//    }
     return curr_radiance;
 }
 
@@ -358,7 +358,7 @@ float4 MergeUpperRadiance(float4 traced_radiance, uint2 target_probe_pos, uint2 
         float2 upper_probe_center_uv = (upper_probe_id + 0.5) * upper_probe_size * one_over_res; // surely this can't go wrong... (IT'S GOING WRONG)
         
         #if PROBE_PLACEMENT == 0
-        float upper_depth = /*LinearizeDepth*/(g_MinMaxDepth.SampleLevel(g_NearestSampler, upper_probe_center_uv, g_cascadeId+1).r); // TODO: Does this need to be linearized??
+        float upper_depth = LinearizeDepth(g_MinMaxDepth.SampleLevel(g_NearestSampler, upper_probe_center_uv, g_cascadeId+1).r); // TODO: Does this need to be linearized??
         #elif PROBE_PLACEMENT == 1
         float upper_depth = (g_MinMaxDepth.SampleLevel(g_NearestSampler, upper_probe_center_uv, 0).r);
         #endif
@@ -368,12 +368,12 @@ float4 MergeUpperRadiance(float4 traced_radiance, uint2 target_probe_pos, uint2 
     float mind = hmin(upper_probe_depths);
     float diffd = maxd - mind;
     float avg = dot(upper_probe_depths, 0.25.xxxx);
-    bool d_edge = (diffd / avg) > 0.002;
+    bool d_edge = (diffd / avg) > 0.005;
     
     if (d_edge)
     {
-        float4 dd = abs(upper_probe_depths - target_probe_depth);
-        weights *= 1.0 / (dd + 0.0001);
+        float4 dd = abs(upper_probe_depths - LinearizeDepth(target_probe_depth));
+        weights *= 1.0 / (150*dd + 1);
     }
     weights /= hadd(weights); // normalize so total is 1
 #endif

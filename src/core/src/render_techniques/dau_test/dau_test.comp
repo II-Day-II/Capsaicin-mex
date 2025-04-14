@@ -49,7 +49,7 @@ float4 Upscale(float2 uv)
     float mind = hmin(depths);
     float diffd = maxd - mind;
     float avg = dot(depths, 0.25.xxxx);
-    bool d_edge = (diffd / avg) > 0.0001; // this threshold is very sensitive
+    bool d_edge = (diffd / avg) > 0.0; // this threshold is very sensitive
     
     if (d_edge)
     {
@@ -66,7 +66,6 @@ float4 Upscale(float2 uv)
         color += g_HalfResGeometryNormalBuffer.Load(int3(bilin_texel, 0)) * weights[i];
     }
     return color;
-        return 0;
 }
 
 [numthreads(8,8,1)]
@@ -99,7 +98,7 @@ void DepthAwareUpscalingTest(uint3 did : SV_DispatchThreadId)
         res = 0;
     if (uv.x > 0.0 && uv.x < 0.5 && uv.y > 0.0 && uv.y < 0.5)
     {
-        res = abs(Upscale(uv) - g_GeometryNormalBuffer.SampleLevel(g_NearestSampler, uv, 0));
+        res = abs(Upscale(uv) - g_HalfResGeometryNormalBuffer.SampleLevel(g_LinearSampler, uv, 0));
     }
     if (uv.x > 0.5 && uv.y > 0.5)
     {
