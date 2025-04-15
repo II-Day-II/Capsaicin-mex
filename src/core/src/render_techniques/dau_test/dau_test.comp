@@ -24,6 +24,14 @@ float LinearizeDepth(float depth)
     return (2.0 * near * far) / (far + near - ndcz * (far - near));
 }
 
+float4 EdgeFunction(float4 depth_diffs)
+{
+    //return exp(-100 * depth_diffs);
+    return (1.0 / (1e4 * depth_diffs + 1));
+}
+
+#define DIFFS 0
+
 #define BILATERAL 1 // 0 -> bilinear, 1 -> bilateral
 
 float4 Upscale(float2 uv)
@@ -43,19 +51,19 @@ float4 Upscale(float2 uv)
     float4 depths = 0;
     for (uint d = 0; d < 4; d++)
     {
-        depths[d] = (g_HalfResDepthBuffer.Load(int3(base_idx + offsets[d], 0)).r);
+        depths[d] = LinearizeDepth(g_HalfResDepthBuffer.Load(int3(base_idx + offsets[d], 0)).r);
     }
     float maxd = hmax(depths);
     float mind = hmin(depths);
     float diffd = maxd - mind;
     float avg = dot(depths, 0.25.xxxx);
-    bool d_edge = (diffd / avg) > 0.0; // this threshold is very sensitive
-    
+    bool d_edge = (diffd / avg) > 0.075; // this threshold is very sensitive
     if (d_edge)
     {
-        float fullres_depth = (g_DepthBuffer.SampleLevel(g_LinearSampler, uv, 0).r);
+        float fullres_depth = LinearizeDepth(g_DepthBuffer.SampleLevel(g_LinearSampler, uv, 0).r);
         float4 dd = abs(depths - fullres_depth);
-        weights *= 1.0 / (dd+0.0001);
+        float4 edge_fn = EdgeFunction(dd);
+        weights *= edge_fn;
     }
     weights /= hadd(weights);
 #endif
@@ -68,32 +76,28 @@ float4 Upscale(float2 uv)
     return color;
 }
 
-[numthreads(8,8,1)]
-void DepthAwareUpscalingTest(uint3 did : SV_DispatchThreadId)
+float4 MultiCompare(float2 uv)
 {
-	uint2 coord = did.xy;
-	float2 uv = (coord + 0.5) / g_BufferDimensions;
-	
-    float4 res = float4(0,0,0,1);
-	if (uv.x < 1.0/4.0)
-	{
-		res = g_GeometryNormalBuffer.SampleLevel(g_NearestSampler, uv, 0);
-	}
-	else if (uv.x < 2.0/4.0)
-	{
-		res = Upscale(uv);
-	}
-	else if (uv.x < 3.0 / 4.0)
-	{
+    float4 res = float4(0, 0, 0, 1);
+    if (uv.x < 1.0 / 4.0)
+    {
+        res = g_GeometryNormalBuffer.SampleLevel(g_NearestSampler, uv, 0);
+    }
+    else if (uv.x < 2.0 / 4.0)
+    {
+        res = Upscale(uv);
+    }
+    else if (uv.x < 3.0 / 4.0)
+    {
         res = g_HalfResGeometryNormalBuffer.SampleLevel(g_LinearSampler, uv, 0);
-	}
+    }
     else
     {
 		//res.xyz = g_HalfResDepthBuffer.SampleLevel(g_NearestSampler, uv, 0).rrr;
-		res = g_HalfResGeometryNormalBuffer.SampleLevel(g_NearestSampler, uv, 0);
+        res = g_HalfResGeometryNormalBuffer.SampleLevel(g_NearestSampler, uv, 0);
     }
-	#define SEPARATOR_WIDTH 0.0003
-    #define SEPARATOR_POS(i) abs(uv.x - i / 4.0)
+#define SEPARATOR_WIDTH 0.0003
+#define SEPARATOR_POS(i) abs(uv.x - i / 4.0)
     if (SEPARATOR_POS(1.0) < SEPARATOR_WIDTH || SEPARATOR_POS(2.0) < SEPARATOR_WIDTH || SEPARATOR_POS(3.0) < SEPARATOR_WIDTH)
         res = 0;
     if (uv.x > 0.0 && uv.x < 0.5 && uv.y > 0.0 && uv.y < 0.5)
@@ -104,5 +108,49 @@ void DepthAwareUpscalingTest(uint3 did : SV_DispatchThreadId)
     {
         res = abs(g_HalfResGeometryNormalBuffer.SampleLevel(g_NearestSampler, uv, 0) - g_HalfResGeometryNormalBuffer.SampleLevel(g_LinearSampler, uv, 0));
     }
+    return res;
+}
+
+float4 Blahonga(float2 uv)
+{
+    float4 res = float4(0, 0, 0, 1);
+    if (uv.x < 0.5)
+    {
+        res = g_GeometryNormalBuffer.SampleLevel(g_NearestSampler, uv, 0);
+    } 
+    else
+    {
+        #if DIFFS
+        res = abs((Upscale(uv) * 2 - 1) - (g_GeometryNormalBuffer.SampleLevel(g_NearestSampler, uv, 0) * 2 - 1));
+        if (uv.y > 0.5)
+        {
+            res = abs((Upscale(uv) * 2 - 1) - (g_HalfResGeometryNormalBuffer.SampleLevel(g_LinearSampler, uv, 0) * 2 - 1));
+            
+        }
+        #else
+        res = Upscale(uv);
+        if (uv.y > 0.5)
+        {
+            res = g_HalfResGeometryNormalBuffer.SampleLevel(g_LinearSampler, uv, 0);
+            
+        }
+        #endif
+        if (abs(uv.y - 0.5) < SEPARATOR_WIDTH*2)
+            res = 1;
+    }
+    if (SEPARATOR_POS(2.0) < SEPARATOR_WIDTH)
+        res = 0;
+    
+    return res;
+}
+
+[numthreads(8,8,1)]
+void DepthAwareUpscalingTest(uint3 did : SV_DispatchThreadId)
+{
+	uint2 coord = did.xy;
+	float2 uv = (coord + 0.5) / g_BufferDimensions;
+	
+    float4 res = Blahonga(uv);
     o_OutputBuffer[coord] = res;
+
 }

@@ -82,7 +82,7 @@ void DAUTechnique::render([[maybe_unused]] CapsaicinInternal &capsaicin) noexcep
         gfxProgramSetParameter(gfx_, dau_program, "g_NearestSampler", capsaicin.getNearestSampler());
         gfxProgramSetParameter(gfx_, dau_program, "g_LinearSampler", capsaicin.getLinearSampler());
         gfxProgramSetParameter(gfx_, dau_program, "g_near", capsaicin.getCamera().nearZ);
-        gfxProgramSetParameter(gfx_, dau_program, "g_near", capsaicin.getCamera().farZ);
+        gfxProgramSetParameter(gfx_, dau_program, "g_far", capsaicin.getCamera().farZ);
         gfxCommandDispatch(gfx_, dispatch_size.x, dispatch_size.y, 1);
     }
 
