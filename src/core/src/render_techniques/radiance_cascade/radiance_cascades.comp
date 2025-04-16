@@ -251,6 +251,8 @@ inline float3 oct_decode(const float2 e)
 #define SPHERE_MAP_MODE 2 // 0 -> costheta, 1 -> octahedral, 2 -> octahedral (equal area)
 #define PROBE_PLACEMENT 0 // 0 -> depth aware, 1 -> probe center // depth aware has issues with depth sensitive leakage
 
+#define MINMAX_MERGE 1
+
 #define EPSILON 0.00001
 
 Texture2D g_lastCascade_min;
@@ -403,6 +405,45 @@ float4 MergeUpperRadiance(float4 traced_radiance, uint2 target_probe_pos, uint2 
     return MergeInterval(traced_radiance, upper_radiance);
 }
 
+float4 MinMaxMergeUpper(uint layer, float4 traced_radiance, uint2 target_probe_pos, uint2 target_probe_size, uint2 pos_in_target_probe, uint target_dir_index, float target_probe_depth)
+{
+    const uint2 upper_probe_size = 2 * target_probe_size;
+    const float2 one_over_res = 1.0 / float2(g_CascadeTexDimensions);
+    uint2 upper_probe_tl;
+    float4 weights;
+    BilinearSamples(((target_probe_pos + 0.5) * target_probe_size), upper_probe_size, weights, upper_probe_tl);
+    
+    float4 upper_probe_depths[2] = { 0.xxxx, 0.xxxx };
+    for (uint i = 0; i < 4; i++)
+    {
+        uint2 upper_probe_id = upper_probe_tl + BilinearOffset(i);
+        float2 upper_probe_center_uv = (upper_probe_id + 0.5) * upper_probe_size * one_over_res; 
+        float2 upper_depths = LinearizeDepth(g_MinMaxDepth.SampleLevel(g_NearestSampler, upper_probe_center_uv, g_cascadeId+2).rg); 
+        upper_probe_depths[0][i] = upper_depths.r;
+        upper_probe_depths[1][i] = upper_depths.g;
+    }
+    float4 depth_diffs = max(EPSILON, abs(upper_probe_depths[1] - upper_probe_depths[0]));
+    float4 depth_weights = (abs(target_probe_depth - upper_probe_depths[0]) / depth_diffs);
+    depth_weights = saturate(depth_weights);
+    
+    uint2 dir_offset = BilinearOffset(target_dir_index) + 2 * pos_in_target_probe;
+    
+    float4 upper_radiance = 0;
+    
+    for (uint p = 0; p < 4; p++)
+    {
+        uint2 upper_probe_id = upper_probe_tl + BilinearOffset(p);
+        uint2 upper_probe_sample_texel = upper_probe_id * upper_probe_size + dir_offset;
+        float4 upper_probe_radiance_max = g_lastCascade_min.Load(int3(upper_probe_sample_texel, 0));
+        float4 upper_probe_radiance_min = g_lastCascade_max.Load(int3(upper_probe_sample_texel, 0));
+        float4 max_radiance = upper_probe_radiance_max * weights[p];
+        float4 min_radiance = upper_probe_radiance_min * weights[p];
+        upper_radiance += lerp(min_radiance, max_radiance, depth_weights[p]);
+    }
+    
+    return MergeInterval(traced_radiance, upper_radiance);
+}
+
 float3 index_to_direction(uint d, uint2 dir_counts, uint2 pos_in_probe, uint2 probe_size)
 {
     //const uint2 dir_counts = sqrt(dir_count_per_pixel);
@@ -415,10 +456,6 @@ float3 index_to_direction(uint d, uint2 dir_counts, uint2 pos_in_probe, uint2 pr
     float3 direction = octahedral_unmap(uv_in_probe); 
 #elif SPHERE_MAP_MODE == 2
     float3 direction = oct_decode(uv_in_probe * 2.0 - 1.0); // this is an equal-area version of the above octahedral mapping. 
-#elif SPHERE_MAP_HEALPIX
-    uint nside = g_cascadeId+1;
-    uint ipix = d + (pos_in_probe.x + pos_in_probe.y * probe_size.x) * nside;
-    float3 direction = healpix_index_to_direction(nside, d);
 #else
     float3 direction = costheta_unmap(uv_in_probe); 
 #endif
@@ -461,13 +498,16 @@ void TraceCascadesPreAvg4(uint3 did : SV_DispatchThreadID)
     }
     // get ray origin for this probe // TODO: different probes on min/max of depth buffer in this probe_position
     probe_normal = normalize(2.0 * probe_normal - 1.0); // using this to offset the position, still getting self intersections...?
+    #if !MINMAX_MERGE
     #if PROBE_PLACEMENT == 0
     const float2 probe_depths = g_MinMaxDepth.SampleLevel(g_NearestSampler, probe_center_uv, cascade_index + 1).rg;
-    const float3 origin = GetRayOriginDepthAware(probe_center_uv, probe_normal,probe_depths).near; // TODO: BUG: this gets us a bunch of stripes...? some resolution dependency with depth and probe textures, and weird self intersections. Depends on ray length??
+    const TwoPos origins = GetRayOriginDepthAware(probe_center_uv, probe_normal, probe_depths);
+    const float3 origin = origins.near; // TODO: BUG: this gets us a bunch of stripes...? some resolution dependency with depth and probe textures, and weird self intersections. Depends on ray length??
     #elif PROBE_PLACEMENT == 1
     const float2 probe_depths = g_MinMaxDepth.SampleLevel(g_NearestSampler, probe_center_uv, 0).rg;
     const float3 origin = GetRayOrigin(probe_center_uv, probe_normal);
     #endif
+    
     
     float4 t_radiance = 0;
     // Do 4 rays this pixel
@@ -490,6 +530,32 @@ void TraceCascadesPreAvg4(uint3 did : SV_DispatchThreadID)
         }
     }
     o_currentCascade_min[coord] = /*t_radiance.a != 0.0 && t_radiance.a != 1.0 ? float4(1,0,1,1) :*/ t_radiance * 0.25;
+    #else
+    const float2 probe_depths = g_MinMaxDepth.SampleLevel(g_NearestSampler, probe_center_uv, cascade_index + 1).rg;
+    const TwoPos origins = GetRayOriginDepthAware(probe_center_uv, probe_normal, probe_depths);
+    const float3 probe_origins[2] = { origins.near, origins.far };
+    [unroll]
+    for (uint layer = 0; layer < 2; layer++)
+    {
+        float4 t_radiance = 0;
+        [unroll]
+        for (uint d = 0; d < 4; d++)
+        {
+            float3 direction = index_to_direction(d, uint2(2, 2), pos_in_probe, probe_size);
+            float4 curr_radiance = TraceInterval(interval, probe_origins[layer], direction, is_max_cascade);
+            if (!is_max_cascade) // merge
+            {
+                t_radiance += MinMaxMergeUpper(layer, curr_radiance, probe_position, probe_size,  pos_in_probe, d, probe_depths[layer]);
+            }
+            else
+            {
+                t_radiance += curr_radiance;
+            }
+        }
+        RWTexture2D<float4> output_tex = layer == 0 ? o_currentCascade_min : o_currentCascade_max;
+        output_tex[coord] = t_radiance * 0.25;
+    }
+    #endif
 
 }
 
