@@ -251,7 +251,7 @@ inline float3 oct_decode(const float2 e)
 #define SPHERE_MAP_MODE 2 // 0 -> costheta, 1 -> octahedral, 2 -> octahedral (equal area)
 #define PROBE_PLACEMENT 0 // 0 -> depth aware, 1 -> probe center // depth aware has issues with depth sensitive leakage
 
-#define MINMAX_MERGE 1
+#define MINMAX_MERGE 0
 
 #define EPSILON 0.00001
 
@@ -422,9 +422,26 @@ float4 MinMaxMergeUpper(uint layer, float4 traced_radiance, uint2 target_probe_p
         upper_probe_depths[0][i] = upper_depths.r;
         upper_probe_depths[1][i] = upper_depths.g;
     }
+    
+    float maxd = dot(upper_probe_depths[1], 0.25.xxxx);
+    float mind = dot(upper_probe_depths[0], 0.25.xxxx);
+    float diffd = maxd - mind;
+    float avg = (maxd + mind) * 0.5;
+    bool d_edge = (diffd / avg) > 0.075;
+    
+    
+    
     float4 depth_diffs = max(EPSILON, abs(upper_probe_depths[1] - upper_probe_depths[0]));
-    float4 depth_weights = (abs(target_probe_depth - upper_probe_depths[0]) / depth_diffs);
+    float4 depth_weights = (abs(LinearizeDepth(target_probe_depth) - upper_probe_depths[0]) / depth_diffs);
     depth_weights = saturate(depth_weights);
+    
+    if (d_edge)
+    {
+        float4 dd = depth_diffs;
+        float4 edge_fn = EdgeFunction(dd);
+        weights *= edge_fn;
+    }
+    weights /= hadd(weights); // normalize so total is 1
     
     uint2 dir_offset = BilinearOffset(target_dir_index) + 2 * pos_in_target_probe;
     
