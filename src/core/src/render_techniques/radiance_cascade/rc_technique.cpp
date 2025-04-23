@@ -32,7 +32,6 @@ RCTechnique::~RCTechnique()
 
 bool RCTechnique::init([[maybe_unused]] CapsaicinInternal const &capsaicin) noexcept
 {
-   
     return initKernel(capsaicin) && initTextures(capsaicin);
 }
 

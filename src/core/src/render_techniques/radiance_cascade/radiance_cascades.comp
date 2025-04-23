@@ -433,16 +433,27 @@ float4 MinMaxMergeUpper(uint layer, float4 traced_radiance, uint2 target_probe_p
     
     float4 depth_diffs = max(EPSILON, abs(upper_probe_depths[1] - upper_probe_depths[0]));
     float4 depth_weights = ((LinearizeDepth(target_probe_depth) - upper_probe_depths[0]) / depth_diffs);
-    depth_weights = select(depth_weights > 1.0.xxxx, 0.0.xxxx, depth_weights);
-    depth_weights = select(depth_weights < 0.0.xxxx, 0.0.xxxx, depth_weights);
     //depth_weights = saturate(depth_weights);
     
-    if (d_edge)
+    bool4 skip_probes = or(depth_weights < 0.0, depth_weights > 1.0);
+    
+    if (all(skip_probes))
     {
-        float4 dd = depth_diffs;
-        float4 edge_fn = EdgeFunction(dd);
-        weights *= edge_fn;
+        return float4(0.0, 0.0, 1.0, 0.0);
     }
+    else
+    {
+        return float4(1, 1, 1, 0);
+    }
+    
+    weights *= select(skip_probes, 0.0, 1.0);
+    
+    //if (d_edge)
+    //{
+    //    float4 dd = depth_diffs;
+    //    float4 edge_fn = EdgeFunction(dd);
+    //    weights *= edge_fn;
+    //}
     weights /= hadd(weights); // normalize so total is 1
     
     uint2 dir_offset = BilinearOffset(target_dir_index) + 2 * pos_in_target_probe;
@@ -571,8 +582,19 @@ void TraceCascadesPreAvg4(uint3 did : SV_DispatchThreadID)
                 t_radiance += curr_radiance;
             }
         }
-        RWTexture2D<float4> output_tex = layer == 0 ? o_currentCascade_min : o_currentCascade_max;
-        output_tex[coord] = t_radiance * 0.25;
+        switch (layer)
+        {
+            case 1:{
+                    o_currentCascade_max[coord] = t_radiance * 0.25;
+                    break;
+                }
+            case 0:
+            default:{
+                    o_currentCascade_min[coord] = t_radiance * 0.25;
+                    break;
+                }
+        }
+        
     }
     #endif
 
