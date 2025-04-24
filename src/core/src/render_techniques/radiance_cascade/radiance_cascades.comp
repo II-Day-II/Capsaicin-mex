@@ -68,6 +68,14 @@ float2 LinearizeDepth(float2 depth)
     return (2.0 * near * far) / (far + near - ndcz * (far - near));
 }
 
+float4 LinearizeDepth(float4 depth)
+{
+    const float near = g_near;
+    const float far = g_far;
+    float4 ndcz = 2.0 * depth - 1.0;
+    return (2.0 * near * far) / (far + near - ndcz * (far - near));
+}
+
 float IntervalScale(uint cascade_index)
 {
     if (cascade_index == 0)
@@ -418,7 +426,7 @@ float4 MinMaxMergeUpper(uint layer, float4 traced_radiance, uint2 target_probe_p
     {
         uint2 upper_probe_id = upper_probe_tl + BilinearOffset(i);
         float2 upper_probe_center_uv = (upper_probe_id + 0.5) * upper_probe_size * one_over_res; 
-        float2 upper_depths = LinearizeDepth(g_MinMaxDepth.SampleLevel(g_NearestSampler, upper_probe_center_uv, g_cascadeId+2).rg); 
+        float2 upper_depths = /*LinearizeDepth*/(g_MinMaxDepth.SampleLevel(g_NearestSampler, upper_probe_center_uv, g_cascadeId+2).rg); 
         upper_probe_depths[0][i] = upper_depths.r;
         upper_probe_depths[1][i] = upper_depths.g;
     }
@@ -427,33 +435,23 @@ float4 MinMaxMergeUpper(uint layer, float4 traced_radiance, uint2 target_probe_p
     float mind = dot(upper_probe_depths[0], 0.25.xxxx);
     float diffd = maxd - mind;
     float avg = (maxd + mind) * 0.5;
-    bool d_edge = (diffd / avg) > 0.075;
+    //bool d_edge = (diffd / avg) > 0.02;
     
     
     
-    float4 depth_diffs = max(EPSILON, abs(upper_probe_depths[1] - upper_probe_depths[0]));
-    float4 depth_weights = ((LinearizeDepth(target_probe_depth) - upper_probe_depths[0]) / depth_diffs);
+    float4 depth_diffs = abs(upper_probe_depths[1] - upper_probe_depths[0]);
+    float4 depth_weights = ((/*LinearizeDepth*/(target_probe_depth) - upper_probe_depths[0]) / depth_diffs); // fewer errors (in cornell) when not linearized
     //depth_weights = saturate(depth_weights);
     
-    bool4 skip_probes = or(depth_weights < 0.0, depth_weights > 1.0);
-    
-    if (all(skip_probes))
-    {
-        return float4(0.0, 0.0, 1.0, 0.0);
-    }
-    else
-    {
-        return float4(1, 1, 1, 0);
-    }
-    
+    bool4 skip_probes = or(depth_weights < 0.0, depth_weights > 1.0 + FLT_EPSILON); // very sensitive comparisons to 1.0 ig
+        
     weights *= select(skip_probes, 0.0, 1.0);
     
-    //if (d_edge)
-    //{
-    //    float4 dd = depth_diffs;
-    //    float4 edge_fn = EdgeFunction(dd);
-    //    weights *= edge_fn;
-    //}
+    {
+        float4 dd = depth_diffs;
+        float4 edge_fn = EdgeFunction(LinearizeDepth(dd));
+        weights *= select(skip_probes, 1.0, edge_fn);
+    }
     weights /= hadd(weights); // normalize so total is 1
     
     uint2 dir_offset = BilinearOffset(target_dir_index) + 2 * pos_in_target_probe;

@@ -30,8 +30,17 @@ RCTechnique::~RCTechnique()
     terminate();
 }
 
+constexpr float LinearizeDepth(const float depth)
+{
+    float const n = 0.1f;
+    float const f  = 1e4f;
+    float const ndcz = 2.0 * depth - 1.0;
+    return (2.0 * n * f) / (f + n - ndcz * (f - n));
+}
+
 bool RCTechnique::init([[maybe_unused]] CapsaicinInternal const &capsaicin) noexcept
 {
+    constexpr float b = LinearizeDepth(0.934388756752f);
     return initKernel(capsaicin) && initTextures(capsaicin);
 }
 
