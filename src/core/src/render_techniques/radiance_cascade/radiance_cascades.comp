@@ -259,7 +259,7 @@ inline float3 oct_decode(const float2 e)
 #define SPHERE_MAP_MODE 2 // 0 -> costheta, 1 -> octahedral, 2 -> octahedral (equal area)
 #define PROBE_PLACEMENT 0 // 0 -> depth aware, 1 -> probe center // depth aware has issues with depth sensitive leakage
 
-#define MINMAX_MERGE 1 // 0 -> depth aware or probe center 1 -> min+max probes
+#define MINMAX_MERGE 0 // 0 -> depth aware or probe center 1 -> min+max probes
 
 #define EPSILON 0.00001
 
@@ -338,7 +338,12 @@ float4 TraceInterval(float2 interval, float3 origin, float3 direction, bool is_m
 float4 EdgeFunction(float4 depth_diffs)
 {
     //return exp(-100 * depth_diffs);
-    return (1.0 / (1e4 * depth_diffs + 1));
+    float4 ret = (1.0 / (1e4 * depth_diffs + 1));
+    for (uint i = 0; i < min(g_cascadeId, 3); i++)
+    {
+        ret = squared(ret);
+    }
+    return ret;
 }
 
 float4 MergeUpperRadiance(float4 traced_radiance, uint2 target_probe_pos, uint2 target_probe_size, uint2 pos_in_target_probe, uint target_dir_index, float target_probe_depth)
@@ -386,7 +391,7 @@ float4 MergeUpperRadiance(float4 traced_radiance, uint2 target_probe_pos, uint2 
     float avg = dot(upper_probe_depths, 0.25.xxxx);
     bool d_edge = (diffd / avg) > 0.075;
     
-    if (d_edge)
+    //if (d_edge)
     {
         float4 dd = abs(upper_probe_depths - LinearizeDepth(target_probe_depth));
         float4 edge_fn = EdgeFunction(dd);

@@ -21,6 +21,14 @@ static constexpr uint nearest_pow_2(uint const n)
     #endif
 }
 
+constexpr float LinearizeDepth(float const depth)
+{
+    float const n    = 0.1f;
+    float const f    = 1e4f;
+    float const ndcz = 2.0f * depth - 1.0f;
+    return (2.0f * n * f) / (f + n - ndcz * (f - n));
+}
+
 RCTechnique::RCTechnique()
     : RenderTechnique("RC technique") 
 {};
@@ -30,17 +38,8 @@ RCTechnique::~RCTechnique()
     terminate();
 }
 
-constexpr float LinearizeDepth(const float depth)
-{
-    float const n = 0.1f;
-    float const f  = 1e4f;
-    float const ndcz = 2.0 * depth - 1.0;
-    return (2.0 * n * f) / (f + n - ndcz * (f - n));
-}
-
 bool RCTechnique::init([[maybe_unused]] CapsaicinInternal const &capsaicin) noexcept
 {
-    constexpr float b = LinearizeDepth(0.934388756752f);
     return initKernel(capsaicin) && initTextures(capsaicin);
 }
 
@@ -224,7 +223,7 @@ void RCTechnique::render([[maybe_unused]] CapsaicinInternal &capsaicin) noexcept
         uint32_t        x = thread_nums[0], y = thread_nums[1];
         uint32_t        thread_size_x = uint32_t(glm::ceil(cascade_dimensions.x / float(x)));
         uint32_t        thread_size_y = uint32_t(glm::ceil(cascade_dimensions.y / float(y)));
-        int             cascade_rendering_stop = options.rc_single_cascade_only ? cascade_count : 0;
+        int             cascade_rendering_stop = options.rc_cascade_range_only ? options.rc_cascade_range : 0;
         for (int cascade_level = cascade_count; cascade_level >= cascade_rendering_stop; cascade_level -= 1)
         {
             gfxProgramSetParameter(gfx_, rc_program, "g_cascadeId", cascade_level);
@@ -243,7 +242,7 @@ void RCTechnique::render([[maybe_unused]] CapsaicinInternal &capsaicin) noexcept
         }
     }
 
-    if (options.rc_preaveraging != PreAverage16 && !options.rc_single_cascade_only) // the preavg16 kernel already has 1 probe per pixel
+    if (options.rc_preaveraging != PreAverage16 && !options.rc_skip_final_average) // the preavg16 kernel already has 1 probe per pixel
     {
         TimedSection rc_final_average_timer(*this, "average c0");
         gfxCommandBindKernel(gfx_, rc_average_kernel);
@@ -288,10 +287,12 @@ RenderOptionList RCTechnique::getRenderOptions() noexcept
 {
     RenderOptionList newOptions;
     newOptions.emplace(RENDER_OPTION_MAKE(rc_cascade_count, options));
+    newOptions.emplace(RENDER_OPTION_MAKE(rc_cascade_range, options));
     newOptions.emplace(RENDER_OPTION_MAKE(rc_c0_length, options));
     newOptions.emplace(RENDER_OPTION_MAKE(rc_preaveraging, options));
     newOptions.emplace(RENDER_OPTION_MAKE(rc_resolution_factor, options));
-    newOptions.emplace(RENDER_OPTION_MAKE(rc_single_cascade_only, options));
+    newOptions.emplace(RENDER_OPTION_MAKE(rc_cascade_range_only, options));
+    newOptions.emplace(RENDER_OPTION_MAKE(rc_skip_final_average, options));
     return newOptions;
 }
 
@@ -300,10 +301,12 @@ RCTechnique::RenderOptions RCTechnique::convertOptions(
 {
     RenderOptions newOptions;
     RENDER_OPTION_GET(rc_cascade_count, newOptions, options);
+    RENDER_OPTION_GET(rc_cascade_range, newOptions, options);
     RENDER_OPTION_GET(rc_c0_length, newOptions, options);
     RENDER_OPTION_GET(rc_preaveraging, newOptions, options);
     RENDER_OPTION_GET(rc_resolution_factor, newOptions, options);
-    RENDER_OPTION_GET(rc_single_cascade_only, newOptions, options);
+    RENDER_OPTION_GET(rc_cascade_range_only, newOptions, options);
+    RENDER_OPTION_GET(rc_skip_final_average, newOptions, options);
     return newOptions;
 }
 
@@ -343,7 +346,12 @@ DebugViewList RCTechnique::getDebugViews() const noexcept
 void RCTechnique::renderGUI([[maybe_unused]] CapsaicinInternal &capsaicin) const noexcept 
 {
     ImGui::SliderInt("Num cascades", &capsaicin.getOption<int>("rc_cascade_count"), 0, 6);
-    ImGui::Checkbox("Render single cascade only", &capsaicin.getOption<bool>("rc_single_cascade_only"));
+    ImGui::Checkbox("Render cascade range only", &capsaicin.getOption<bool>("rc_cascade_range_only")); 
+    if (capsaicin.getOption<bool>("rc_cascade_range_only"))
+    {
+        ImGui::SliderInt("Cascade range", &capsaicin.getOption<int>("rc_cascade_range"), 0, capsaicin.getOption<int>("rc_cascade_count"));
+    };
+    ImGui::Checkbox("Skip final average step", &capsaicin.getOption<bool>("rc_skip_final_average"));
     ImGui::SliderFloat(
         "C0 ray length", &capsaicin.getOption<float>("rc_c0_length"), 0.0000001f, 100.0f, "%.7f", ImGuiSliderFlags_Logarithmic);
     

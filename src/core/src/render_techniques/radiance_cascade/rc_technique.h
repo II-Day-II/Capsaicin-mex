@@ -14,7 +14,7 @@ public:
      * @return A list of all valid configuration options.
      */
     RenderOptionList getRenderOptions() noexcept override;
-    enum PreAvgSetup 
+    enum PreAvgSetup
     {
         PreAverage0 = 0,
         PreAverage4 = 1,
@@ -25,10 +25,12 @@ public:
     {
         // TODO: put parameters here, e.g. min/max bounds
         int rc_cascade_count = 5;
+        int   rc_cascade_range           = 0;
         float rc_c0_length       = 0.01f;
-        int rc_preaveraging      = PreAvgSetup::PreAverage16;
+        int rc_preaveraging      = PreAvgSetup::PreAverage4;
         int   rc_resolution_factor       = 0;
-        bool  rc_single_cascade_only = false;
+        bool  rc_cascade_range_only = false;
+        bool  rc_skip_final_average      = false;
     };
 
     /**

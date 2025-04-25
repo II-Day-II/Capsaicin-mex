@@ -68,7 +68,10 @@ float3 squared(const float3 value)
 {
     return value * value;
 }
-
+float4 squared(const float4 value)
+{
+    return value * value;
+}
 /**
  * Get the squared length of a vector.
  * @param value Value to get squared length from.
