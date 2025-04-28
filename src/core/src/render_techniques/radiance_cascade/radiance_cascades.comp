@@ -339,9 +339,13 @@ float4 EdgeFunction(float4 depth_diffs)
 {
     //return exp(-100 * depth_diffs);
     float4 ret = (1.0 / (1e4 * depth_diffs + 1));
-    for (uint i = 0; i < min(g_cascadeId, 3); i++)
+    //for (uint i = 0; i < min(g_cascadeId, 2); i++)
+    //{
+    //    ret = squared(ret);
+    //}
+    if (g_cascadeId > 1)
     {
-        ret = squared(ret);
+        ret *= ret;
     }
     return ret;
 }
@@ -391,7 +395,7 @@ float4 MergeUpperRadiance(float4 traced_radiance, uint2 target_probe_pos, uint2 
     float avg = dot(upper_probe_depths, 0.25.xxxx);
     bool d_edge = (diffd / avg) > 0.075;
     
-    //if (d_edge)
+    if (d_edge)
     {
         float4 dd = abs(upper_probe_depths - LinearizeDepth(target_probe_depth));
         float4 edge_fn = EdgeFunction(dd);
@@ -523,12 +527,6 @@ void TraceCascadesPreAvg4(uint3 did : SV_DispatchThreadID)
     // get probe normal and see if it's on a surface
     float3 probe_normal = g_GeometryNormalBuffer.SampleLevel(g_TextureSampler, probe_center_uv, 0).xyz;
     //float3 probe_normal = g_GeometryNormalBuffer.SampleLevel(g_TextureSampler, coord * one_over_res, 0).xyz;
-    const bool is_sky_pixel = dot(probe_normal, probe_normal) == 0.0;
-    if (is_sky_pixel)
-    {
-        o_currentCascade_min[coord] = float4(0, 0, 0, 1);
-        return; // sky pixel does not reflect
-    }
     // get ray origin for this probe // TODO: different probes on min/max of depth buffer in this probe_position
     probe_normal = normalize(2.0 * probe_normal - 1.0); // using this to offset the position, still getting self intersections...?
     #if !MINMAX_MERGE
@@ -541,6 +539,12 @@ void TraceCascadesPreAvg4(uint3 did : SV_DispatchThreadID)
     const float3 origin = GetRayOrigin(probe_center_uv, probe_normal);
     #endif
     
+    const bool is_sky_pixel = probe_depths.x == 1.0; //dot(probe_normal, probe_normal) == 0.0;
+    if (is_sky_pixel)
+    {
+        o_currentCascade_min[coord] = float4(0, 0, 0, 1);
+        return; // sky pixel does not reflect
+    }
     
     float4 t_radiance = 0;
     // Do 4 rays this pixel
