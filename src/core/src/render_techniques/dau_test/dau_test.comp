@@ -27,7 +27,7 @@ float LinearizeDepth(float depth)
 float4 EdgeFunction(float4 depth_diffs)
 {
     //return exp(-100 * depth_diffs);
-    return (1.0 / (1e4 * depth_diffs + 1));
+    return (1.0 / (1e6 * depth_diffs + 1e4));
 }
 
 #define DIFFS 0

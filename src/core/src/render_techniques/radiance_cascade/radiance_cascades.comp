@@ -338,15 +338,16 @@ float4 TraceInterval(float2 interval, float3 origin, float3 direction, bool is_m
 float4 EdgeFunction(float4 depth_diffs)
 {
     //return exp(-100 * depth_diffs);
-    float4 ret = (1.0 / (1e4 * depth_diffs + 1));
+    float4 ret = (1.0 / (1e3 * depth_diffs + 1e-1));
+    ret *= pow(ret, g_cascadeId);
     //for (uint i = 0; i < min(g_cascadeId, 2); i++)
     //{
     //    ret = squared(ret);
     //}
-    if (g_cascadeId > 1)
-    {
-        ret *= ret;
-    }
+    //if (g_cascadeId > 1)
+    //{
+    //    ret *= ret;
+    //}
     return ret;
 }
 
@@ -395,12 +396,23 @@ float4 MergeUpperRadiance(float4 traced_radiance, uint2 target_probe_pos, uint2 
     float avg = dot(upper_probe_depths, 0.25.xxxx);
     bool d_edge = (diffd / avg) > 0.075;
     
+    float4 dd = abs(upper_probe_depths - LinearizeDepth(target_probe_depth));
     if (d_edge)
     {
-        float4 dd = abs(upper_probe_depths - LinearizeDepth(target_probe_depth));
         float4 edge_fn = EdgeFunction(dd);
         weights *= edge_fn;
     }
+    
+    //float maxw = hmax(dd);
+    //float minw = hmin(dd);
+    //float diffw = maxw - minw;
+    //float wavg = dot(weights, 0.25.xxxx);
+    //bool fricked = diffw > 1.75 && wavg < 0.5e-15; 
+    //if (maxw > 10*(g_cascadeId + 1) )
+    //{
+    //    return MergeInterval(traced_radiance, 0.xxxx);
+    //}
+    
     weights /= hadd(weights); // normalize so total is 1
 #endif
     
