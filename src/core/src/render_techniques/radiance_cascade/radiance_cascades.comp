@@ -259,7 +259,7 @@ inline float3 oct_decode(const float2 e)
 #define SPHERE_MAP_MODE 2 // 0 -> costheta, 1 -> octahedral, 2 -> octahedral (equal area)
 #define PROBE_PLACEMENT 0 // 0 -> depth aware, 1 -> probe center // depth aware has issues with depth sensitive leakage
 
-#define MINMAX_MERGE 0 // 0 -> depth aware or probe center 1 -> min+max probes
+#define MINMAX_MERGE 1 // 0 -> depth aware or probe center 1 -> min+max probes
 
 #define EPSILON 0.00001
 
@@ -381,12 +381,10 @@ float4 MergeUpperRadiance(float4 traced_radiance, uint2 target_probe_pos, uint2 
         uint2 offset = BilinearOffset(d);
         uint2 upper_probe_id = upper_probe_tl + offset;
         
-        float2 upper_probe_center_uv = (upper_probe_id + 0.5) * upper_probe_size * one_over_res; // surely this can't go wrong... (IT'S GOING WRONG)
-        
         #if PROBE_PLACEMENT == 0
-        float upper_depth = LinearizeDepth(g_MinMaxDepth.SampleLevel(g_NearestSampler, upper_probe_center_uv, g_cascadeId+2).r); // TODO: Does this need to be linearized??
+        float upper_depth = LinearizeDepth(g_MinMaxDepth.Load(int3(upper_probe_id, g_cascadeId + 2)).r); // TODO: Does this need to be linearized??
         #elif PROBE_PLACEMENT == 1
-        float upper_depth = (g_MinMaxDepth.SampleLevel(g_NearestSampler, upper_probe_center_uv, 0).r);
+        float upper_depth = LinearizeDepth(g_MinMaxDepth.Load(int3(upper_probe_id, 0)).r);
         #endif
         upper_probe_depths[d] = upper_depth;
     }
@@ -404,16 +402,15 @@ float4 MergeUpperRadiance(float4 traced_radiance, uint2 target_probe_pos, uint2 
     }
     
     //float maxw = hmax(dd);
-    //float minw = hmin(dd);
-    //float diffw = maxw - minw;
-    //float wavg = dot(weights, 0.25.xxxx);
-    //bool fricked = diffw > 1.75 && wavg < 0.5e-15; 
-    //if (maxw > 10*(g_cascadeId + 1) )
+    ////float minw = hmin(dd);
+    ////float diffw = maxw - minw;
+    ////float wavg = dot(weights, 0.25.xxxx);
+    //if (all(weights < 1e-16) && maxw > 0.95)
     //{
     //    return MergeInterval(traced_radiance, 0.xxxx);
     //}
     
-    weights /= hadd(weights); // normalize so total is 1
+    weights /= hadd(weights); // normalize so total is 1 // BUG: this means weights close to [0,0,0,0] are treated the same as weights close to [1,1,1,1], there's no way to have zero contribution from upper probes
 #endif
     
     float4 upper_radiance = 0.0;
@@ -447,7 +444,8 @@ float4 MinMaxMergeUpper(uint layer, float4 traced_radiance, uint2 target_probe_p
     {
         uint2 upper_probe_id = upper_probe_tl + BilinearOffset(i);
         float2 upper_probe_center_uv = (upper_probe_id + 0.5) * upper_probe_size * one_over_res; 
-        float2 upper_depths = /*LinearizeDepth*/(g_MinMaxDepth.SampleLevel(g_NearestSampler, upper_probe_center_uv, g_cascadeId+2).rg); 
+        float2 upper_depths = LinearizeDepth(g_MinMaxDepth.SampleLevel(g_NearestSampler, upper_probe_center_uv, g_cascadeId+2).rg); 
+        //float2 upper_depths = /*LinearizeDepth*/(g_MinMaxDepth.Load(int3(upper_probe_id, g_cascadeId + 2)).rg); // BUG: using Load here misses bottom and right edges
         upper_probe_depths[0][i] = upper_depths.r;
         upper_probe_depths[1][i] = upper_depths.g;
     }
@@ -461,19 +459,15 @@ float4 MinMaxMergeUpper(uint layer, float4 traced_radiance, uint2 target_probe_p
     
     
     float4 depth_diffs = abs(upper_probe_depths[1] - upper_probe_depths[0]);
-    float4 depth_weights = ((/*LinearizeDepth*/(target_probe_depth) - upper_probe_depths[0]) / depth_diffs); // fewer errors (in cornell) when not linearized
-    //depth_weights = saturate(depth_weights);
+    float4 depth_weights = ((LinearizeDepth(target_probe_depth) - upper_probe_depths[0]) / depth_diffs); // fewer errors (in cornell) when not linearized (and skipping probes)
     
-    bool4 skip_probes = or(depth_weights < 0.0, depth_weights > 1.0 + FLT_EPSILON); // very sensitive comparisons to 1.0 ig
+    bool4 skip_probes = or(depth_weights < -2.0 - FLT_EPSILON, depth_weights > 2.0 + FLT_EPSILON); // hack to avoid some of the haloing ( has side effects)
+    depth_weights = saturate(depth_weights);
         
-    weights *= select(skip_probes, 0.0, 1.0);
+    weights *= select(skip_probes, 0.0, 1.0); // does better with non-linear depths (and discarding everything < 0 or > 1
     
-    {
-        float4 dd = depth_diffs;
-        float4 edge_fn = EdgeFunction(LinearizeDepth(dd));
-        weights *= select(skip_probes, 1.0, edge_fn);
-    }
-    weights /= hadd(weights); // normalize so total is 1
+    
+    weights /= hadd(weights); // normalize so total is 1 (as long as they're not all 0...)
     
     uint2 dir_offset = BilinearOffset(target_dir_index) + 2 * pos_in_target_probe;
     
@@ -483,11 +477,11 @@ float4 MinMaxMergeUpper(uint layer, float4 traced_radiance, uint2 target_probe_p
     {
         uint2 upper_probe_id = upper_probe_tl + BilinearOffset(p);
         uint2 upper_probe_sample_texel = upper_probe_id * upper_probe_size + dir_offset;
-        float4 upper_probe_radiance_max = g_lastCascade_min.Load(int3(upper_probe_sample_texel, 0));
-        float4 upper_probe_radiance_min = g_lastCascade_max.Load(int3(upper_probe_sample_texel, 0));
+        float4 upper_probe_radiance_min = g_lastCascade_min.Load(int3(upper_probe_sample_texel, 0));
+        float4 upper_probe_radiance_max = g_lastCascade_max.Load(int3(upper_probe_sample_texel, 0));
         float4 max_radiance = upper_probe_radiance_max * weights[p];
         float4 min_radiance = upper_probe_radiance_min * weights[p];
-        upper_radiance += lerp(min_radiance, max_radiance, depth_weights[p]);
+        upper_radiance += lerp(min_radiance, max_radiance, depth_weights[p]); 
     }
     
     return MergeInterval(traced_radiance, upper_radiance);
