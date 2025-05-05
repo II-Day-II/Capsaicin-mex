@@ -83,7 +83,7 @@ float IntervalScale(uint cascade_index)
     else if (cascade_index > g_numCascades) // the top cascade should end as far away as possible if it integrates the skybox
         return FLT_MAX;
     //return pow(2.0, cascade_index);
-    return float(1u << (1u * cascade_index)); // TODO: variable scale factor here, currently equiv. pow(2, idx)
+    return float(1u << (2u * cascade_index)); // TODO: variable scale factor here, currently equiv. pow(2, idx)
 }
 
 // TODO: figure out how I want to structure interval lengths. They must be long enough to reach opposing walls, but short enough to not be noticeable at close distances
@@ -279,13 +279,38 @@ float2 index_to_uv_offset(uint idx, uint2 sample_counts)
     return sample_idx / sample_counts; //[-0.5+0.5/sample_counts, 0.5-0.5/sample_counts] eg [-3/8, 3/8] for sc=4,4
 }
 
+
+float3 index_to_direction(uint d, uint2 dir_counts, uint2 pos_in_probe, uint2 probe_size)
+{
+    //const uint2 dir_counts = sqrt(dir_count_per_pixel);
+    float2 dir_offset = index_to_uv_offset(d, dir_counts);
+    // get a ray direction for this pixel in the probe
+    //float2 uv_in_probe = (pos_in_probe + 0.5 + 0.5*(BilinearOffset(d) - 0.5)) / probe_size; // this works for d in [0,3]
+    float2 uv_in_probe = (pos_in_probe + 0.5 + dir_offset) / probe_size;
+        
+#if SPHERE_MAP_MODE == 1
+    float3 direction = octahedral_unmap(uv_in_probe); 
+#elif SPHERE_MAP_MODE == 2
+    float3 direction = oct_decode(uv_in_probe * 2.0 - 1.0); // this is an equal-area version of the above octahedral mapping. 
+#else
+    float3 direction = costheta_unmap(uv_in_probe); 
+#endif
+    return direction;
+}
+
 float4 MergeInterval(float4 near, float4 far)
 {
     const float3 radiance = near.rgb + (far.rgb * near.a);
     return float4(radiance, near.a * far.a);
 }
 
-float4 TraceInterval(float2 interval, float3 origin, float3 direction, bool is_max_cascade)
+struct TraceResult
+{
+    float4 radiance;
+    float4 hit_point; // w is 1 if hit, 0 if miss ( NOTE: duplicated data from radiance.a )
+};
+
+TraceResult TraceInterval(float2 interval, float3 origin, float3 direction, bool is_max_cascade)
 {
     float4 curr_radiance = float4(0.0, 0.0, 0.0, 1.0);
     
@@ -299,7 +324,7 @@ float4 TraceInterval(float2 interval, float3 origin, float3 direction, bool is_m
     ray.TMax = interval.y;
         
     // TODO: BUG: there's a bunch of light leaking with long ray intervals...
-    
+    float4 hit_point = 0;
     ClosestRayQuery query = TraceRay < ClosestRayQuery > (ray);
     if (query.CommittedStatus() != COMMITTED_NOTHING) // ray hit something
     {
@@ -316,6 +341,7 @@ float4 TraceInterval(float2 interval, float3 origin, float3 direction, bool is_m
         {
             curr_radiance.a = 0;
         }
+        hit_point = float4(origin + direction * t, 1.0);
     }
     else if (is_max_cascade) // hit nothing, sample env. map if top cascade 
     {
@@ -327,12 +353,50 @@ float4 TraceInterval(float2 interval, float3 origin, float3 direction, bool is_m
         curr_radiance.a = 0; // this prevents propagating cMax sky samples when lower cascades' partially occluded ray groups merge with cMax
     }
 #endif
+    TraceResult res = { curr_radiance, hit_point };
     // this is the hackest hack i've ever done
 //    if (direction.z == 0)
 //    {
 //        curr_radiance.a = 0; // axis aligned ray will never hit axis aligned wall
 //    }
-    return curr_radiance;
+    return res;
+}
+
+void LeakingFix(inout float4 curr_radiance, float3 trace_end, uint2 nearest_upper_probe_id, uint2 upper_probe_size, uint2 pos_in_target_probe, uint layer)
+{
+    float3 ray_start = trace_end;
+    RayDesc ray;
+    ray.Origin = ray_start;
+    ray.TMin = 0.0;
+    
+    float2 upper_probe_center_uv = ((nearest_upper_probe_id + 0.5) * upper_probe_size) / g_CascadeTexDimensions;
+    float3 upper_probe_normal = normalize(2.0 * g_GeometryNormalBuffer.SampleLevel(g_NearestSampler, upper_probe_center_uv, 0).xyz - 1.0);
+    float2 upper_probe_depths = g_MinMaxDepth.Load(int3(nearest_upper_probe_id, g_cascadeId + 2)).rg;
+    TwoPos upper_probe_origin = GetRayOriginDepthAware(upper_probe_center_uv, upper_probe_normal, upper_probe_depths);
+    float3 origins[2] = { upper_probe_origin.near, upper_probe_origin.far };
+    
+    float t = g_c0_length * IntervalScale(g_cascadeId + 1);
+    
+    float occlusion = 1;
+    
+    for (uint dir_index = 0; dir_index < 4; dir_index++)
+    {
+        uint2 pos_in_upper_probe = (nearest_upper_probe_id * upper_probe_size + BilinearOffset(dir_index) + 2 * pos_in_target_probe) % upper_probe_size;
+        float3 direction = index_to_direction(dir_index, uint2(2, 2), pos_in_upper_probe, upper_probe_size);
+        float3 ray_end = origins[layer] + t * direction;
+        float3 ray_dir = ray_end - ray_start;
+        ray.TMax = length(ray_dir);
+        ray.Direction = normalize(ray_dir);
+    
+        ClosestRayQuery q = TraceRay < ClosestRayQuery > (ray);
+        if (q.CommittedStatus() != COMMITTED_NOTHING)
+        {
+            occlusion -= 1.0/4/*0.25*/;
+            
+        }
+
+    }
+    curr_radiance.a *= occlusion;
 }
 
 float4 EdgeFunction(float4 depth_diffs)
@@ -392,7 +456,7 @@ float4 MergeUpperRadiance(float4 traced_radiance, uint2 target_probe_pos, uint2 
     float mind = hmin(upper_probe_depths);
     float diffd = maxd - mind;
     float avg = dot(upper_probe_depths, 0.25.xxxx);
-    bool d_edge = (diffd / avg) > 0.075;
+    bool d_edge = (diffd / avg) > 0.0075;
     
     float4 dd = abs(upper_probe_depths - LinearizeDepth(target_probe_depth));
     if (d_edge)
@@ -487,23 +551,7 @@ float4 MinMaxMergeUpper(uint layer, float4 traced_radiance, uint2 target_probe_p
     return MergeInterval(traced_radiance, upper_radiance);
 }
 
-float3 index_to_direction(uint d, uint2 dir_counts, uint2 pos_in_probe, uint2 probe_size)
-{
-    //const uint2 dir_counts = sqrt(dir_count_per_pixel);
-    float2 dir_offset = index_to_uv_offset(d, dir_counts);
-    // get a ray direction for this pixel in the probe
-    //float2 uv_in_probe = (pos_in_probe + 0.5 + 0.5*(BilinearOffset(d) - 0.5)) / probe_size; // this works for d in [0,3]
-    float2 uv_in_probe = (pos_in_probe + 0.5 + dir_offset) / probe_size;
-        
-#if SPHERE_MAP_MODE == 1
-    float3 direction = octahedral_unmap(uv_in_probe); 
-#elif SPHERE_MAP_MODE == 2
-    float3 direction = oct_decode(uv_in_probe * 2.0 - 1.0); // this is an equal-area version of the above octahedral mapping. 
-#else
-    float3 direction = costheta_unmap(uv_in_probe); 
-#endif
-    return direction;
-}
+
 
 
 [numthreads(8,8,1)]
@@ -558,7 +606,9 @@ void TraceCascadesPreAvg4(uint3 did : SV_DispatchThreadID)
     for (uint d = 0; d < 4; d++)
     {
         float3 direction = index_to_direction(d, uint2(2, 2), pos_in_probe, probe_size);
-        float4 curr_radiance = TraceInterval(interval, origin, direction, is_max_cascade);
+        TraceResult trace = TraceInterval(interval, origin, direction, is_max_cascade);
+        float4 curr_radiance = trace.radiance;
+        //LeakingFix(curr_radiance, trace.hit_point.xyz, probe_position / 2, probe_size * 2, pos_in_probe, 0);
         #if !DEBUG_DISABLE_MERGING
         if (!is_max_cascade) // merge
         {
@@ -585,7 +635,9 @@ void TraceCascadesPreAvg4(uint3 did : SV_DispatchThreadID)
         for (uint d = 0; d < 4; d++)
         {
             float3 direction = index_to_direction(d, uint2(2, 2), pos_in_probe, probe_size);
-            float4 curr_radiance = TraceInterval(interval, probe_origins[layer], direction, is_max_cascade);
+            TraceResult trace = TraceInterval(interval, probe_origins[layer], direction, is_max_cascade);
+            float4 curr_radiance = trace.radiance;
+            //LeakingFix(curr_radiance, trace.hit_point.xyz, probe_position / 2, probe_size * 2, 2 * pos_in_probe, layer);
             if (!is_max_cascade) // merge
             {
                 t_radiance += MinMaxMergeUpper(layer, curr_radiance, probe_position, probe_size,  pos_in_probe, d, probe_depths[layer]);
@@ -670,7 +722,8 @@ void TraceCascadesPreAvg16(uint3 did : SV_DispatchThreadID)
     {
         float3 direction = index_to_direction(d, dir_counts, pos_in_probe, probe_size);       
         // raytrace
-        float4 curr_radiance = TraceInterval(interval, origin, direction, is_max_cascade);   
+        TraceResult trace = TraceInterval(interval, origin, direction, is_max_cascade);   
+        float4 curr_radiance = trace.radiance;
         #if !DEBUG_DISABLE_MERGING
         // merge
         if (!is_max_cascade) // merging
@@ -811,7 +864,8 @@ void TraceCascades(uint3 did : SV_DispatchThreadID)
     //return;
     
     // raytrace
-    float4 radiance = TraceInterval(interval, origin, direction, is_max_cascade);
+    TraceResult trace = TraceInterval(interval, origin, direction, is_max_cascade);
+    float4 radiance = trace.radiance;
 #if !DEBUG_DISABLE_MERGING
     if (!is_max_cascade)
     {
