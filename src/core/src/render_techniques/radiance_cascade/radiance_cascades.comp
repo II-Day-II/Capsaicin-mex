@@ -260,6 +260,10 @@ inline float3 oct_decode(const float2 e)
 #define PROBE_PLACEMENT 0 // 0 -> depth aware, 1 -> probe center // depth aware has issues with depth sensitive leakage
 
 #define MINMAX_MERGE 1 // 0 -> depth aware or probe center 1 -> min+max probes
+#define REVERSE_LEAKING_FIX 0
+#define LEAKING_FIX 0
+
+#define RAYS_PER_PIXEL 4 // 4 is regular preaveraging, 16 is wack, use another kernel for other options
 
 #define EPSILON 0.00001
 
@@ -324,7 +328,7 @@ TraceResult TraceInterval(float2 interval, float3 origin, float3 direction, bool
     ray.TMax = interval.y;
         
     // TODO: BUG: there's a bunch of light leaking with long ray intervals...
-    float4 hit_point = 0;
+    float4 hit_point = float4(origin + direction * interval.y, 0.0);
     ClosestRayQuery query = TraceRay < ClosestRayQuery > (ray);
     if (query.CommittedStatus() != COMMITTED_NOTHING) // ray hit something
     {
@@ -397,6 +401,40 @@ void LeakingFix(inout float4 curr_radiance, float3 trace_end, uint2 nearest_uppe
 
     }
     curr_radiance.a *= occlusion;
+}
+
+void ReverseLeakingFix(inout float4 curr_radiance, float3 trace_to, uint2 probe_id, uint2 pos_in_probe, uint2 probe_size, uint layer)
+{
+    uint2 lower_probe_size = probe_size / 2;
+    uint2 pos_in_lower_probe = pos_in_probe / 2;
+    uint2 lower_probe_dir = pos_in_probe % 2;
+    uint lower_probe_dir_index = lower_probe_dir.x + lower_probe_dir.y * lower_probe_size.x;
+    float3 lower_direction = index_to_direction(lower_probe_dir_index, uint2(2, 2), pos_in_lower_probe, lower_probe_size);
+    
+    uint2 lower_probe_id = probe_id * 2 + lower_probe_dir;
+    float2 lower_probe_uv = (lower_probe_id + 0.5) * lower_probe_size / g_CascadeTexDimensions;
+    float3 lower_probe_normal = normalize(2.0 * g_GeometryNormalBuffer.SampleLevel(g_NearestSampler, lower_probe_uv, 0).xyz - 1.0);
+    float2 lower_probe_depths = g_MinMaxDepth.Load(int3(lower_probe_id, g_cascadeId)).rg;
+    TwoPos lower_probe_origins = GetRayOriginDepthAware(lower_probe_uv, lower_probe_normal, lower_probe_depths);
+    float3 origins[2] = { lower_probe_origins.near, lower_probe_origins.far };
+    
+    float3 trace_from = origins[layer] + lower_direction * IntervalScale(g_cascadeId) * g_c0_length;
+    float t = distance(trace_to, trace_from);
+    float3 trace_direction = normalize(trace_to - trace_from);
+    
+    RayDesc ray;
+    ray.Origin = trace_from;
+    ray.TMin = 0.0;
+    ray.Direction = trace_direction;
+    ray.TMax = t;
+    
+    ClosestRayQuery query = TraceRay<ClosestRayQuery>(ray);
+    
+    if (query.CommittedStatus() != COMMITTED_NOTHING)
+    {
+        curr_radiance = MergeInterval(float4(0,0,0,0), curr_radiance);
+    }
+
 }
 
 float4 EdgeFunction(float4 depth_diffs)
@@ -552,8 +590,6 @@ float4 MinMaxMergeUpper(uint layer, float4 traced_radiance, uint2 target_probe_p
 }
 
 
-
-
 [numthreads(8,8,1)]
 void TraceCascadesPreAvg4(uint3 did : SV_DispatchThreadID)
 {
@@ -563,7 +599,13 @@ void TraceCascadesPreAvg4(uint3 did : SV_DispatchThreadID)
     const bool is_max_cascade = g_cascadeId == g_numCascades;
     const float2 resolution = g_CascadeTexDimensions;
     const float2 one_over_res = 1.0 / resolution;
+    
+    #if RAYS_PER_PIXEL == 16
+    const uint2 probe_size = pow(2, cascade_index); // size of the probe in pixels, c0 has 2x2 pixels / probe
+    #else
     const uint2 probe_size = pow(2, cascade_index+1); // size of the probe in pixels, c0 has 2x2 pixels / probe                   // TODO: variable scaling factor for probe size per cascade
+    #endif
+    
     const float2 num_probes = resolution / probe_size; // [res/2, res/4, res/8, ...] number of probes in x/y direction (unused?)
     const float2 interval = GetInterval(cascade_index, g_c0_length); // the start and end distances of this cascade's interval                   // TODO: variable base length
     
@@ -583,6 +625,13 @@ void TraceCascadesPreAvg4(uint3 did : SV_DispatchThreadID)
     //float3 probe_normal = g_GeometryNormalBuffer.SampleLevel(g_TextureSampler, coord * one_over_res, 0).xyz;
     // get ray origin for this probe // TODO: different probes on min/max of depth buffer in this probe_position
     probe_normal = normalize(2.0 * probe_normal - 1.0); // using this to offset the position, still getting self intersections...?
+ 
+    #if RAYS_PER_PIXEL == 16
+    uint2 dir_counts = 4;
+    #else
+    uint2 dir_counts = 2;
+    #endif
+    
     #if !MINMAX_MERGE
     #if PROBE_PLACEMENT == 0
     const float2 probe_depths = g_MinMaxDepth.SampleLevel(g_NearestSampler, probe_center_uv, cascade_index + 1).rg;
@@ -600,29 +649,52 @@ void TraceCascadesPreAvg4(uint3 did : SV_DispatchThreadID)
         return; // sky pixel does not reflect
     }
     
+    
     float4 t_radiance = 0;
-    // Do 4 rays this pixel
     [unroll]
-    for (uint d = 0; d < 4; d++)
+    #if RAYS_PER_PIXEL == 16
+    for (uint d = 0; d < 16; d++) // Do 16 rays this pixel
+    #else
+    for (uint d = 0; d < 4; d++) // Do 4 rays this pixel
+    #endif
     {
-        float3 direction = index_to_direction(d, uint2(2, 2), pos_in_probe, probe_size);
+        float3 direction = index_to_direction(d, dir_counts, pos_in_probe, probe_size);
         TraceResult trace = TraceInterval(interval, origin, direction, is_max_cascade);
         float4 curr_radiance = trace.radiance;
-        //LeakingFix(curr_radiance, trace.hit_point.xyz, probe_position / 2, probe_size * 2, pos_in_probe, 0);
+        
+        #if LEAKING_FIX
+        if(trace.hit_point.w == 0.0 && !is_max_cascade)
+        {
+            LeakingFix(curr_radiance, trace.hit_point.xyz, probe_position / 2, probe_size * 2, pos_in_probe, 0);
+        }
+        #endif
+        
+        float4 merged = curr_radiance;
+        
         #if !DEBUG_DISABLE_MERGING
         if (!is_max_cascade) // merge
         {
-            t_radiance += MergeUpperRadiance(curr_radiance, probe_position, probe_size, pos_in_probe, d, probe_depths.r);
+            #if RAYS_PER_PIXEL == 16
+            uint dir_index = (d / 4 + d / 2 - 3 * (d / 4 % 2) - 4 * (d / 8)); // holy fuck what is this mapping 0..16 -> 0,0,1,1,0,0,1,1,2,2,3,3,2,2,3,3
+            #else
+            uint dir_index = d;
+            #endif
+            merged = MergeUpperRadiance(curr_radiance, probe_position, probe_size, pos_in_probe, dir_index, probe_depths.r);
         }
-        else
         #else
         t_radiance += g_lastCascade_min[coord];
         #endif
+        
+        #if REVERSE_LEAKING_FIX
+        if (!is_cascade_0)
         {
-            t_radiance += curr_radiance;
+            ReverseLeakingFix(merged, origin + interval.x * direction, probe_position, pos_in_probe, probe_size, 0);
         }
+        #endif
+        
+        t_radiance += merged;
     }
-    o_currentCascade_min[coord] = /*t_radiance.a != 0.0 && t_radiance.a != 1.0 ? float4(1,0,1,1) :*/ t_radiance * 0.25;
+    o_currentCascade_min[coord] = t_radiance * 1.0 / RAYS_PER_PIXEL;
     #else
     const float2 probe_depths = g_MinMaxDepth.SampleLevel(g_NearestSampler, probe_center_uv, cascade_index + 1).rg;
     const TwoPos origins = GetRayOriginDepthAware(probe_center_uv, probe_normal, probe_depths);
@@ -632,30 +704,56 @@ void TraceCascadesPreAvg4(uint3 did : SV_DispatchThreadID)
     {
         float4 t_radiance = 0;
         [unroll]
+        #if RAYS_PER_PIXEL == 16
+        for (uint d = 0; d < 16; d++)
+        #else
         for (uint d = 0; d < 4; d++)
+        #endif
         {
-            float3 direction = index_to_direction(d, uint2(2, 2), pos_in_probe, probe_size);
+            float3 direction = index_to_direction(d, dir_counts, pos_in_probe, probe_size);
             TraceResult trace = TraceInterval(interval, probe_origins[layer], direction, is_max_cascade);
             float4 curr_radiance = trace.radiance;
-            //LeakingFix(curr_radiance, trace.hit_point.xyz, probe_position / 2, probe_size * 2, 2 * pos_in_probe, layer);
+            
+            #if LEAKING_FIX
+            if (trace.hit_point.w == 0.0 && !is_max_cascade)
+            {
+                LeakingFix(curr_radiance, trace.hit_point.xyz, probe_position / 2, probe_size * 2, 2 * pos_in_probe, layer);
+            }
+            #endif
+            
+            float4 merged = 0;
             if (!is_max_cascade) // merge
             {
-                t_radiance += MinMaxMergeUpper(layer, curr_radiance, probe_position, probe_size,  pos_in_probe, d, probe_depths[layer]);
+                #if RAYS_PER_PIXEL == 16
+                uint dir_index = (d / 4 + d / 2 - 3 * (d / 4 % 2) - 4 * (d / 8)); // holy fuck what is this mapping 0..16 -> 0,0,1,1,0,0,1,1,2,2,3,3,2,2,3,3
+                #else
+                uint dir_index = d;
+                #endif
+                merged = MinMaxMergeUpper(layer, curr_radiance, probe_position, probe_size, pos_in_probe, dir_index, probe_depths[layer]);
             }
             else
             {
-                t_radiance += curr_radiance;
+                merged = curr_radiance;
             }
+            
+            #if REVERSE_LEAKING_FIX
+            if(!is_cascade_0)
+            {
+                ReverseLeakingFix(merged, probe_origins[layer] + interval.x * direction, probe_position, pos_in_probe, probe_size, layer);
+            }
+            #endif
+            
+            t_radiance += merged;
         }
         switch (layer)
         {
             case 1:{
-                    o_currentCascade_max[coord] = t_radiance * 0.25;
+                    o_currentCascade_max[coord] = t_radiance * 1.0 / RAYS_PER_PIXEL;
                     break;
                 }
             case 0:
             default:{
-                    o_currentCascade_min[coord] = t_radiance * 0.25;
+                    o_currentCascade_min[coord] = t_radiance * 1.0 / RAYS_PER_PIXEL;
                     break;
                 }
         }
@@ -665,88 +763,6 @@ void TraceCascadesPreAvg4(uint3 did : SV_DispatchThreadID)
 
 }
 
-
-
-// TODO: there's a lot of temporal noise and i dont know whyyyy ( it's maybe a sync issue)
-[numthreads(8,8,1)]
-void TraceCascadesPreAvg16(uint3 did : SV_DispatchThreadID) 
-{
-    //TraceCascadesPreAvg4(did);
-    //return;
-    // constants for this cascade
-    const float cascade_index = g_cascadeId;
-    const bool is_max_cascade = g_cascadeId == g_numCascades;
-    //const float2 resolution = g_BufferDimensions; 
-    const float2 resolution = g_CascadeTexDimensions;
-    const float2 one_over_res = 1.0 / resolution;
-    const uint2 probe_size = pow(2, cascade_index); // size of the probe in pixels, c0 has 1x1 pixels / probe                   // TODO: variable scaling factor for probe size per cascade
-    const float2 num_probes = resolution / probe_size; // [res/2, res/4, res/8, ...] number of probes in x/y direction (unused?)
-    const float2 interval = GetInterval(cascade_index, g_c0_length); // the start and end distances of this cascade's interval                   // TODO: variable base length
-    
-    // constants for this invocation (dependent on dispatch id)
-    const uint2 coord = did.xy;
-    if (any(coord > g_CascadeTexDimensions))
-        return;
-    // constants for this probe
-    const uint2 probe_position = floor(coord / probe_size); // [0, num_probes] position of this probe in the grid of probes
-    const float2 probe_center = (probe_position + 0.5) * probe_size; // [probe_size/2, res - probe_size/2] the texel coordinate of the center of this probe (basically just recreating coord and adding .5?)
-    const float2 probe_center_uv = probe_center * one_over_res; // [0, 1] uv coordinate of this probe's center 
-    // constants for this pixel
-    const uint2 pos_in_probe = coord % probe_size; // [0, probe_size] position of this pixel in the probe
-    
-    // get probe normal and see if it's on a surface
-    float3 probe_normal = g_GeometryNormalBuffer.SampleLevel(g_TextureSampler, probe_center_uv, 0).xyz;
-    //float3 probe_normal = g_GeometryNormalBuffer.SampleLevel(g_TextureSampler, coord * one_over_res, 0).xyz;
-    const bool is_sky_pixel = dot(probe_normal, probe_normal) == 0.0;
-    if (is_sky_pixel)
-    {
-        o_currentCascade_min[coord] = float4(0, 0, 0, 1);
-        return; // sky pixel does not reflect
-    }
-    // get ray origin for this probe // TODO: different probes on min/max of depth buffer in this probe_position
-    probe_normal = normalize(2.0 * probe_normal - 1.0); // using this to offset the position, still getting self intersections...?
-    #if PROBE_PLACEMENT == 0
-    const float2 probe_depths = g_MinMaxDepth.SampleLevel(g_NearestSampler, probe_center_uv, g_cascadeId+1).rg;
-    const float3 origin = GetRayOriginDepthAware(probe_center_uv, probe_normal, probe_depths).near; // BUG: this gets wacky stripes everywhere, dependent on ray length...?
-    #elif PROBE_PLACEMENT == 1
-    const float2 probe_depths= g_MinMaxDepth.SampleLevel(g_NearestSampler, probe_center_uv, 0).rg;
-    const float3 origin = GetRayOrigin(probe_center_uv, probe_normal);
-    #endif
-    //const uint dir_count_per_pixel = 4*4; // should always be a square number i think (does it have to be an even square? a pow2 square?)
-    const uint2 dir_counts = uint2(4, 4);
-    const uint dir_count_per_pixel = dir_counts.x * dir_counts.y;
-    
-    float4 t_radiance = 0;
-    [unroll]
-    for (uint d = 0; d < dir_count_per_pixel; d++) // preaverage - trace 4 rays and store average result in this pixel
-    {
-        float3 direction = index_to_direction(d, dir_counts, pos_in_probe, probe_size);       
-        // raytrace
-        TraceResult trace = TraceInterval(interval, origin, direction, is_max_cascade);   
-        float4 curr_radiance = trace.radiance;
-        #if !DEBUG_DISABLE_MERGING
-        // merge
-        if (!is_max_cascade) // merging
-        {
-            // TODO: how the hell do I generalize this for ranges other than 0..16???????
-            uint mapped_d = (d / 4 + d / 2 - 3 * (d / 4 % 2) - 4 * (d / 8)); // holy fuck what is this mapping 0..16 -> 0,0,1,1,0,0,1,1,2,2,3,3,2,2,3,3
-            //uint mapped_d = (d / (dir_count_per_pixel / 4)); // map d to 0..3 to choose corresponding ray average to merge with // TODO: variable scaling
-            t_radiance += MergeUpperRadiance(curr_radiance, probe_position, probe_size, pos_in_probe, mapped_d, probe_depths.r);
-        } // merging
-        else // max cascade only needs curr_radiance
-        #else
-        t_radiance += g_lastCascade_min[coord];
-        #endif
-        {
-            t_radiance += curr_radiance;
-        }
-    } // preaveraging 
-
-    // return
-    o_currentCascade_min[coord] = t_radiance / dir_count_per_pixel;
-    //o_currentCascade_min[coord] = t_radiance / (t_radiance + 10.0);
-    
-}
 
 void DebugInfo(uint3 did)
 {
@@ -787,27 +803,27 @@ void DebugInfo(uint3 did)
 
     const float3 origin2 = GetRayOrigin(probe_center_uv, probe_normal);
     
-    float4 t_radiance = 0;
-    uint d = 0;
-    float3 direction = normalize(float3(0, 0, 1)); //index_to_direction(d, uint2(2, 2), pos_in_probe, probe_size);
-    //direction = normalize(origin - g_Eye);
+    //float4 t_radiance = 0;
+    //uint d = 0;
+    //float3 direction = normalize(float3(0, 0, 1)); //index_to_direction(d, uint2(2, 2), pos_in_probe, probe_size);
+    ////direction = normalize(origin - g_Eye);
     
-    float3 ray_start = origin + direction * interval.x;
-    float3 ray_start2 = origin2 + direction * interval.x;
-    origin = ray_start;
+    //float3 ray_start = origin + direction * interval.x;
+    //float3 ray_start2 = origin2 + direction * interval.x;
+    //origin = ray_start;
     
-    float wallz = 0; //-1.04;
-    float3 f = 0;
-    if (false || abs(origin.z - wallz) < 0.05)
-    {
-        f = (wallz - origin.z);
-        f = select(f > 0, float3(0, 1, 0), float3(1,0,0));
-    }
-    else
-    {
-        f = origin;
-    }
-    o_currentCascade_min[coord] = float4(f, 1);
+    //float wallz = 0; //-1.04;
+    //float3 f = 0;
+    //if (false || abs(origin.z - wallz) < 0.05)
+    //{
+    //    f = (wallz - origin.z);
+    //    f = select(f > 0, float3(0, 1, 0), float3(1,0,0));
+    //}
+    //else
+    //{
+    //    f = origin;
+    //}
+    o_currentCascade_min[coord] = float4(frac(origin).xxx, 1);
 }
 
 [numthreads(8,8,1)]

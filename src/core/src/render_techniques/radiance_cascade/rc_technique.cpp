@@ -47,7 +47,7 @@ void RCTechnique::terminate() noexcept
 {
     gfxDestroyProgram(gfx_, rc_program);
     gfxDestroyKernel(gfx_, rc_kernel);
-    gfxDestroyKernel(gfx_, rc_kernel_preavg16);
+    gfxDestroyKernel(gfx_, rc_kernel_preavg4);
     
     gfxDestroyProgram(gfx_, minmax_depth_program);
     gfxDestroyKernel(gfx_, minmax_depth_kernel);
@@ -205,7 +205,6 @@ void RCTechnique::render([[maybe_unused]] CapsaicinInternal &capsaicin) noexcept
     switch (options.rc_preaveraging)
     {
         case PreAverage4: gfxCommandBindKernel(gfx_, rc_kernel_preavg4); break;
-        case PreAverage16: gfxCommandBindKernel(gfx_, rc_kernel_preavg16); break;
         case PreAverage0:
         default: gfxCommandBindKernel(gfx_, rc_kernel); break;
     }
@@ -242,7 +241,7 @@ void RCTechnique::render([[maybe_unused]] CapsaicinInternal &capsaicin) noexcept
         }
     }
 
-    if (options.rc_preaveraging != PreAverage16 && !options.rc_skip_final_average) // the preavg16 kernel already has 1 probe per pixel
+    if (!options.rc_skip_final_average) // the preavg16 kernel already has 1 probe per pixel
     {
         TimedSection rc_final_average_timer(*this, "average c0");
         gfxCommandBindKernel(gfx_, rc_average_kernel);
@@ -355,7 +354,7 @@ void RCTechnique::renderGUI([[maybe_unused]] CapsaicinInternal &capsaicin) const
     ImGui::SliderFloat(
         "C0 ray length", &capsaicin.getOption<float>("rc_c0_length"), 0.0000001f, 100.0f, "%.7f", ImGuiSliderFlags_Logarithmic);
     
-    char const *preavg_labels[] = {"OFF", "4", "16"};
+    char const *preavg_labels[] = {"OFF(Debug)", "4"};
     ImGui::Combo("Use Preaveraging", &capsaicin.getOption<int>("rc_preaveraging"),
         preavg_labels, RCTechnique::PreAverageSetupCount);
     ImGui::SliderInt("Resolution factor", &capsaicin.getOption<int>("rc_resolution_factor"), -4, 1);
@@ -368,8 +367,6 @@ bool RCTechnique::initKernel(CapsaicinInternal const& capsaicin) noexcept
 
     rc_kernel = gfxCreateComputeKernel(
         gfx_, rc_program, "TraceCascades", defines.data(), (uint32_t)defines.size()); 
-    rc_kernel_preavg16 = gfxCreateComputeKernel(
-        gfx_, rc_program, "TraceCascadesPreAvg16", defines.data(), (uint32_t)defines.size());
     rc_kernel_preavg4 = gfxCreateComputeKernel(
         gfx_, rc_program, "TraceCascadesPreAvg4", defines.data(), (uint32_t)defines.size());
     rc_average_kernel = gfxCreateComputeKernel(

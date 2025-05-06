@@ -18,8 +18,7 @@ public:
     {
         PreAverage0 = 0,
         PreAverage4 = 1,
-        PreAverage16 = 2,
-        PreAverageSetupCount = 3,
+        PreAverageSetupCount = 2,
     };
     struct RenderOptions
     {
@@ -92,7 +91,6 @@ protected:
     RenderOptions options;
     GfxProgram    rc_program;
     GfxKernel     rc_kernel;
-    GfxKernel     rc_kernel_preavg16;
     GfxKernel     rc_kernel_preavg4;
     GfxKernel     rc_average_kernel;
     GfxKernel     rc_resolve_kernel;
