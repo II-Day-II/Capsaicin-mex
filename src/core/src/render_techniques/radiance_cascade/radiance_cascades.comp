@@ -83,10 +83,10 @@ float IntervalScale(uint cascade_index)
     else if (cascade_index > g_numCascades) // the top cascade should end as far away as possible if it integrates the skybox
         return FLT_MAX;
     //return pow(2.0, cascade_index);
-    return float(1u << (2u * cascade_index)); // TODO: variable scale factor here, currently equiv. pow(2, idx)
+    return float(1u << (2u * cascade_index)); // TODO: variable scale factor here, currently equiv. pow(4, idx) (4 recommended by Sannikov)
 }
 
-// TODO: figure out how I want to structure interval lengths. They must be long enough to reach opposing walls, but short enough to not be noticeable at close distances
+// NOTE: Interval lengths. They must be long enough to reach opposing walls, but short enough to not be noticeable at close distances
 float2 GetInterval(uint cascade_index, float base_length)
 {
     return base_length * float2(IntervalScale(cascade_index), IntervalScale(cascade_index + 1) + 1);
@@ -174,7 +174,6 @@ float3 GetRayOrigin(float2 probe_uv, float3 normal)
 
 float4 GetRadiance(IntersectData idata, RayDesc ray)
 {
-    //return float4(idata.normal, 1.0);
     Material material = idata.material;
     MaterialBSDF materialBSDF = MakeMaterialBSDF(material, idata.uv);
     float3 reflectance = 0;
@@ -183,18 +182,18 @@ float4 GetRadiance(IntersectData idata, RayDesc ray)
         // TODO: sample a light in some reasonable way (use the gi10 hashgrid cache?)
         // TODO: account for whether the light is occluded as well (we have no shadow maps QmQ)
         // TODO: should we even look at direct lighting here? Seems stupid
-        MaterialBRDF materialBRDF = MakeMaterialBRDF(material, idata.uv);
+        //MaterialBRDF materialBRDF = MakeMaterialBRDF(material, idata.uv);
         // compute diffuse compensation term with specular dominant half-vector
-        float3 specular_dominant_direction = calculateGGXSpecularDirection(idata.normal, ray.Direction, sqrt(materialBRDF.roughnessAlpha));
-        float3 specular_dominant_half_vector = normalize(ray.Direction + specular_dominant_direction);
-        float dotHV = saturate(dot(ray.Direction, specular_dominant_half_vector));
-        float3 diffuse_compensation = diffuseCompensation(materialBRDF.F0, dotHV);
+        //float3 specular_dominant_direction = calculateGGXSpecularDirection(idata.normal, ray.Direction, sqrt(materialBRDF.roughnessAlpha));
+        //float3 specular_dominant_half_vector = normalize(ray.Direction + specular_dominant_direction);
+        //float dotHV = saturate(dot(ray.Direction, specular_dominant_half_vector));
+        //float3 diffuse_compensation = diffuseCompensation(materialBRDF.F0, dotHV);
 
         // diffuse term
-        float3 diffuse = evaluateLambert(materialBRDF.albedo) * diffuse_compensation * 0.05; // TODO: wtf am i even trying to do here
+        //float3 diffuse = evaluateLambert(materialBRDF.albedo) * diffuse_compensation * 0.05; // TODO: wtf am i even trying to do here
         //float3 closest_light_dir = float3(0,0,0);
         //reflectance = evaluateBRDF(materialBRDF, idata.normal, ray.Direction, normalize(closest_light_dir)); 
-        reflectance = diffuse;
+        //reflectance = diffuse;
         reflectance = 0;
     }
     else
@@ -259,11 +258,11 @@ inline float3 oct_decode(const float2 e)
 #define SPHERE_MAP_MODE 2 // 0 -> costheta, 1 -> octahedral, 2 -> octahedral (equal area)
 #define PROBE_PLACEMENT 0 // 0 -> depth aware, 1 -> probe center // depth aware has issues with depth sensitive leakage
 
-#define MINMAX_MERGE 1 // 0 -> depth aware or probe center 1 -> min+max probes
-#define REVERSE_LEAKING_FIX 0
-#define LEAKING_FIX 0
+#define MINMAX_MERGE 0 // 0 -> depth aware or probe center 1 -> min+max probes
+#define REVERSE_LEAKING_FIX 1
+#define LEAKING_FIX 0 // highly incompatible with minmax, breaks depth aware filter
 
-#define RAYS_PER_PIXEL 4 // 4 is regular preaveraging, 16 is wack, use another kernel for other options
+#define RAYS_PER_PIXEL 4 // 1 doesn't merge right, 4 is regular preaveraging and actually works, 16 is wack, use another kernel (write your own, future me) for other options
 
 #define EPSILON 0.00001
 
@@ -275,7 +274,6 @@ uint2 g_CascadeTexDimensions;
 
 // idx: [0, sample_counts.x*sample_counts.y]
 // sample_counts: sqrt(rays per pixel)
-// 
 float2 index_to_uv_offset(uint idx, uint2 sample_counts) 
 {
     float2 sample_idx = float2(idx % sample_counts.x, idx / sample_counts.x) + 0.5; // [0.5,sample_counts-0.5] eg [0.5, 3.5] for sc=4,4
@@ -326,8 +324,7 @@ TraceResult TraceInterval(float2 interval, float3 origin, float3 direction, bool
     ray.Origin = origin;
     ray.TMin = interval.x;
     ray.TMax = interval.y;
-        
-    // TODO: BUG: there's a bunch of light leaking with long ray intervals...
+
     float4 hit_point = float4(origin + direction * interval.y, 0.0);
     ClosestRayQuery query = TraceRay < ClosestRayQuery > (ray);
     if (query.CommittedStatus() != COMMITTED_NOTHING) // ray hit something
@@ -484,7 +481,7 @@ float4 MergeUpperRadiance(float4 traced_radiance, uint2 target_probe_pos, uint2 
         uint2 upper_probe_id = upper_probe_tl + offset;
         
         #if PROBE_PLACEMENT == 0
-        float upper_depth = LinearizeDepth(g_MinMaxDepth.Load(int3(upper_probe_id, g_cascadeId + 2)).r); // TODO: Does this need to be linearized??
+        float upper_depth = LinearizeDepth(g_MinMaxDepth.Load(int3(upper_probe_id, g_cascadeId + 2)).r); // TODO: Does this *need* to be linearized?? Check other places as well
         #elif PROBE_PLACEMENT == 1
         float upper_depth = LinearizeDepth(g_MinMaxDepth.Load(int3(upper_probe_id, 0)).r);
         #endif
@@ -590,6 +587,8 @@ float4 MinMaxMergeUpper(uint layer, float4 traced_radiance, uint2 target_probe_p
 }
 
 
+
+// The primary kernel for the whole algorithm. Make other options behave like this too please
 [numthreads(8,8,1)]
 void TraceCascadesPreAvg4(uint3 did : SV_DispatchThreadID)
 {
@@ -601,13 +600,15 @@ void TraceCascadesPreAvg4(uint3 did : SV_DispatchThreadID)
     const float2 one_over_res = 1.0 / resolution;
     
     #if RAYS_PER_PIXEL == 16
-    const uint2 probe_size = pow(2, cascade_index); // size of the probe in pixels, c0 has 2x2 pixels / probe
+    const uint2 probe_size = pow(2, cascade_index); // size of the probe in pixels, c0 has 1x1 pixels / probe
+    #elif RAYS_PER_PIXEL == 1
+    const uint2 probe_size = pow(2, cascade_index + 2); // size of the probe in pixels, c0 has 4x4 pixels / probe
     #else
-    const uint2 probe_size = pow(2, cascade_index+1); // size of the probe in pixels, c0 has 2x2 pixels / probe                   // TODO: variable scaling factor for probe size per cascade
+    const uint2 probe_size = pow(2, cascade_index + 1); // size of the probe in pixels, c0 has 2x2 pixels / probe                   // TODO: variable scaling factor for probe size per cascade
     #endif
     
     const float2 num_probes = resolution / probe_size; // [res/2, res/4, res/8, ...] number of probes in x/y direction (unused?)
-    const float2 interval = GetInterval(cascade_index, g_c0_length); // the start and end distances of this cascade's interval                   // TODO: variable base length
+    const float2 interval = GetInterval(cascade_index, g_c0_length); // the start and end distances of this cascade's interval
     
     // constants for this invocation (dependent on dispatch id)
     const uint2 coord = did.xy;
@@ -622,16 +623,17 @@ void TraceCascadesPreAvg4(uint3 did : SV_DispatchThreadID)
     
     // get probe normal and see if it's on a surface
     float3 probe_normal = g_GeometryNormalBuffer.SampleLevel(g_TextureSampler, probe_center_uv, 0).xyz;
-    //float3 probe_normal = g_GeometryNormalBuffer.SampleLevel(g_TextureSampler, coord * one_over_res, 0).xyz;
-    // get ray origin for this probe // TODO: different probes on min/max of depth buffer in this probe_position
     probe_normal = normalize(2.0 * probe_normal - 1.0); // using this to offset the position, still getting self intersections...?
  
     #if RAYS_PER_PIXEL == 16
     uint2 dir_counts = 4;
+    #elif RAYS_PER_PIXEL == 1
+    uint2 dir_counts = 1;
     #else
     uint2 dir_counts = 2;
     #endif
     
+    // get ray origin for this probe 
     #if !MINMAX_MERGE
     #if PROBE_PLACEMENT == 0
     const float2 probe_depths = g_MinMaxDepth.SampleLevel(g_NearestSampler, probe_center_uv, cascade_index + 1).rg;
@@ -652,11 +654,7 @@ void TraceCascadesPreAvg4(uint3 did : SV_DispatchThreadID)
     
     float4 t_radiance = 0;
     [unroll]
-    #if RAYS_PER_PIXEL == 16
-    for (uint d = 0; d < 16; d++) // Do 16 rays this pixel
-    #else
-    for (uint d = 0; d < 4; d++) // Do 4 rays this pixel
-    #endif
+    for (uint d = 0; d < RAYS_PER_PIXEL; d++) // Do 1, 4 or 16 rays this pixel
     {
         float3 direction = index_to_direction(d, dir_counts, pos_in_probe, probe_size);
         TraceResult trace = TraceInterval(interval, origin, direction, is_max_cascade);
@@ -704,11 +702,7 @@ void TraceCascadesPreAvg4(uint3 did : SV_DispatchThreadID)
     {
         float4 t_radiance = 0;
         [unroll]
-        #if RAYS_PER_PIXEL == 16
-        for (uint d = 0; d < 16; d++)
-        #else
-        for (uint d = 0; d < 4; d++)
-        #endif
+        for (uint d = 0; d < RAYS_PER_PIXEL; d++)
         {
             float3 direction = index_to_direction(d, dir_counts, pos_in_probe, probe_size);
             TraceResult trace = TraceInterval(interval, probe_origins[layer], direction, is_max_cascade);
@@ -774,7 +768,7 @@ void DebugInfo(uint3 did)
     const float2 one_over_res = 1.0 / resolution;
     const uint2 probe_size = pow(2, cascade_index + 1); // size of the probe in pixels, c0 has 2x2 pixels / probe                   // TODO: variable scaling factor for probe size per cascade
     const float2 num_probes = resolution / probe_size; // [res/2, res/4, res/8, ...] number of probes in x/y direction (unused?)
-    const float2 interval = GetInterval(cascade_index, g_c0_length); // the start and end distances of this cascade's interval                   // TODO: variable base length
+    const float2 interval = GetInterval(cascade_index, g_c0_length); // the start and end distances of this cascade's interval
     
     // constants for this invocation (dependent on dispatch id)
     const uint2 coord = did.xy;
@@ -796,7 +790,7 @@ void DebugInfo(uint3 did)
         o_currentCascade_min[coord] = float4(0, 0, 0, 1);
         return; // sky pixel does not reflect
     }
-    // get ray origin for this probe // TODO: different probes on min/max of depth buffer in this probe_position
+    // get ray origin for this probe 
     probe_normal = normalize(2.0 * probe_normal - 1.0); // using this to offset the position, still getting self intersections...?
     const float2 probe_depths = g_MinMaxDepth.SampleLevel(g_NearestSampler, probe_center_uv, g_cascadeId + 1).rg;
     float3 origin = GetRayOriginDepthAware(probe_center_uv, probe_normal, probe_depths).near; // TODO: BUG: this gets us a bunch of stripes...? some resolution dependency with depth and probe textures, and weird self intersections. Depends on ray length??
@@ -840,7 +834,7 @@ void TraceCascades(uint3 did : SV_DispatchThreadID)
     const float2 one_over_res = 1.0 / resolution;
     const float2 probe_size = pow(2, cascade_index + 2);                     // size of the probe in pixels, c0 has 4x4 pixels / probe                   // TODO: variable scaling factor for probe size per cascade
     const float2 num_probes = resolution / probe_size;                       // [res/2, res/4, res/8, ...] number of probes in x/y direction (unused?)
-    const float2 interval = GetInterval(cascade_index, g_c0_length);         // the start and end distances of this cascade's interval                   // TODO: variable base length
+    const float2 interval = GetInterval(cascade_index, g_c0_length);         // the start and end distances of this cascade's interval 
     
     // constants for this invocation (dependent on dispatch id)
     const uint2 coord = did.xy;
@@ -859,7 +853,7 @@ void TraceCascades(uint3 did : SV_DispatchThreadID)
         o_currentCascade_min[coord] = float4(0, 0, 0, 1);
         return; // sky pixel does not reflect
     }
-    // get ray origin for this probe // TODO: different probes on min/max of depth buffer in this probe_position
+    // get ray origin for this probe 
     probe_normal = 2.0 * probe_normal - 1.0; // using this to offset the position, still getting self intersections...? Maybe they don't matter since i'm gonna average these out next pass?
     //const float3 origin = GetRayOriginDepthAware(probe_center_uv, probe_normal, g_cascadeId + 1); 
     const float3 origin = GetRayOrigin(probe_center_uv, probe_normal);
@@ -869,7 +863,7 @@ void TraceCascades(uint3 did : SV_DispatchThreadID)
     // get a ray direction for this pixel in the probe
     const float2 uv_in_probe = (pos_in_probe + 0.5) / probe_size;
     #if SPHERE_MAP_MODE == 1
-    float3 direction = octahedral_unmap(uv_in_probe); // TODO: this only samples 4 points on a circle if probe_size is 2x2
+    float3 direction = octahedral_unmap(uv_in_probe); 
     #elif SPHERE_MAP_MODE == 0
     float3 direction = costheta_unmap(uv_in_probe);
     #elif SPHERE_MAP_MODE == 2
@@ -885,9 +879,6 @@ void TraceCascades(uint3 did : SV_DispatchThreadID)
 #if !DEBUG_DISABLE_MERGING
     if (!is_max_cascade)
     {
-        // TODO: depth aware upsampling of upper cascade, requires per-probe depth (mips?)
-        // TODO: figure out the cascade offsets
-    
         // merge with upper cascade
         float2 upper_probe_size = probe_size * 2; //pow(2, cascade_index + 2);
         float4 weights;
@@ -900,7 +891,7 @@ void TraceCascades(uint3 did : SV_DispatchThreadID)
         float4 merged = 0;
         float total_weight = 0;
         
-        // TODO: should these loops be switched? 
+        // should these loops be switched? #define MERGE_DIR_FIRST 1
         // for each corresponding upper probe, average its corresponding directions
         // then sample and merge those averages? Seems to make more sense to me...
             
@@ -921,8 +912,7 @@ void TraceCascades(uint3 did : SV_DispatchThreadID)
                 float4 bilinear_interval = g_lastCascade_min.Load(int3(bilinear_texel, 0));
                 float weight = weights[i];
 #if BILATERAL_UPSAMPLING
-                // TODO: min/max here? currently just doing min
-                // TODO: this simply does not work.
+                // TODO: make this equivalent to the preaveraging code
                 float2 bilinear_uv = bilinear_texel * one_over_res; // surely this can't go wrong
                 float current_depth = LinearizeDepth(g_MinMaxDepth.SampleLevel(g_NearestSampler, bilinear_uv, g_cascadeId + 0).r);
                 //float current_depth = LinearizeDepth(g_MinMaxDepth.SampleLevel(g_NearestSampler, bilinear_uv, 0).r);
