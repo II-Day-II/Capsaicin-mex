@@ -21,6 +21,7 @@ SamplerState g_TextureSampler; // Is a linear sampler
 
 
 float4x4 g_ViewProjectionInverse;
+float4x4 g_ViewProjection;
 
 
 #include "../../geometry/mesh.hlsl"
@@ -253,6 +254,7 @@ inline float3 oct_decode(const float2 e)
 #define DEBUG_DIRECTIONS 0
 #define DEBUG_DISABLE_MERGING 0
 #define DEBUG_DISABLE_ENV_MAP 0
+
 #define BILATERAL_UPSAMPLING 1
 #define MERGE_DIR_FIRST 0 // doesn't matter for bilinear, but bilateral has an effect here (no effect when preaveraging)
 #define SPHERE_MAP_MODE 2 // 0 -> costheta, 1 -> octahedral, 2 -> octahedral (equal area)
@@ -261,6 +263,7 @@ inline float3 oct_decode(const float2 e)
 #define MINMAX_MERGE 1 // 0 -> depth aware or probe center 1 -> min+max probes
 #define REVERSE_LEAKING_FIX 0
 #define LEAKING_FIX 0 // highly incompatible with minmax, breaks depth aware filter
+#define DUMB_LEAKING_FIX 0 // probably the best leaking fix so far... still incompatible with minmax
 
 #define RAYS_PER_PIXEL 4 // 1 doesn't merge right, 4 is regular preaveraging and actually works, 16 is wack, use another kernel (write your own, future me) for other options
 
@@ -432,6 +435,13 @@ void ReverseLeakingFix(inout float4 curr_radiance, float3 trace_to, uint2 probe_
         curr_radiance = MergeInterval(float4(0,0,0,0), curr_radiance);
     }
 
+}
+
+bool DumbLeakingFix_ShouldTrace(float3 origin)
+{
+    float3 projected_depth = transformPointProjection(origin, g_ViewProjection);
+    float2 actual_depth = g_MinMaxDepth.SampleLevel(g_NearestSampler, (float2(1, -1) * projected_depth.xy) * 0.5 + 0.5, 0).xy;
+    return projected_depth.z <= actual_depth.x;
 }
 
 float4 EdgeFunction(float4 depth_diffs)
@@ -657,8 +667,18 @@ void TraceCascadesPreAvg4(uint3 did : SV_DispatchThreadID)
     for (uint d = 0; d < RAYS_PER_PIXEL; d++) // Do 1, 4 or 16 rays this pixel
     {
         float3 direction = index_to_direction(d, dir_counts, pos_in_probe, probe_size);
+        float4 curr_radiance = 0;
+        #if DUMB_LEAKING_FIX
+        TraceResult trace = (TraceResult)0;
+        if (DumbLeakingFix_ShouldTrace(origin))
+        {
+            trace = TraceInterval(interval, origin, direction, is_max_cascade);
+            curr_radiance = trace.radiance;
+        }
+        #else
         TraceResult trace = TraceInterval(interval, origin, direction, is_max_cascade);
-        float4 curr_radiance = trace.radiance;
+        curr_radiance = trace.radiance;
+        #endif
         
         #if LEAKING_FIX
         if(trace.hit_point.w == 0.0 && !is_max_cascade)
@@ -705,9 +725,19 @@ void TraceCascadesPreAvg4(uint3 did : SV_DispatchThreadID)
         for (uint d = 0; d < RAYS_PER_PIXEL; d++)
         {
             float3 direction = index_to_direction(d, dir_counts, pos_in_probe, probe_size);
+            #if DUMB_LEAKING_FIX
+            TraceResult trace = (TraceResult)0;
+            float4 curr_radiance = 0;
+            if (DumbLeakingFix_ShouldTrace(probe_origins[0]))
+            {
+                trace = TraceInterval(interval, probe_origins[layer], direction, is_max_cascade);
+                curr_radiance = trace.radiance;
+            }
+            #else
             TraceResult trace = TraceInterval(interval, probe_origins[layer], direction, is_max_cascade);
             float4 curr_radiance = trace.radiance;
-            
+            #endif            
+    
             #if LEAKING_FIX
             if (trace.hit_point.w == 0.0 && !is_max_cascade)
             {

@@ -196,6 +196,7 @@ void RCTechnique::render([[maybe_unused]] CapsaicinInternal &capsaicin) noexcept
 
     gfxProgramSetParameter(
         gfx_, rc_program, "g_ViewProjectionInverse", capsaicin.getCameraMatrices(false).inv_view_projection);
+    gfxProgramSetParameter(gfx_, rc_program, "g_ViewProjection", capsaicin.getCameraMatrices(false).view_projection);
     gfxProgramSetParameter(gfx_, rc_program, "g_Eye", capsaicin.getCamera().eye);
     
 
