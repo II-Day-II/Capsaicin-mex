@@ -712,7 +712,11 @@ void TraceCascadesPreAvg4(uint3 did : SV_DispatchThreadID)
         
         t_radiance += merged;
     }
-    o_currentCascade_min[coord] = (PI * 4.0 / pow(2,(1 + g_cascadeId))) * t_radiance * 1.0 / RAYS_PER_PIXEL;
+    if (is_cascade_0)
+    {
+        t_radiance *= (PI * 4.0 / (float)(probe_size.x * probe_size.y));
+    }
+    o_currentCascade_min[coord] = t_radiance * 1.0 / RAYS_PER_PIXEL;
     #else
     const float2 probe_depths = g_MinMaxDepth.SampleLevel(g_NearestSampler, probe_center_uv, cascade_index + 1).rg;
     const TwoPos origins = GetRayOriginDepthAware(probe_center_uv, probe_normal, probe_depths);
@@ -769,15 +773,19 @@ void TraceCascadesPreAvg4(uint3 did : SV_DispatchThreadID)
             
             t_radiance += merged;
         }
+        if (is_cascade_0)
+        {
+            t_radiance *= (PI * 4.0 / (float)(probe_size.x * probe_size.y));
+        }
         switch (layer)
         {
             case 1:{
-                    o_currentCascade_max[coord] = (PI * 4.0 / pow(2,(1 + g_cascadeId))) * t_radiance * 1.0 / RAYS_PER_PIXEL;
+                    o_currentCascade_max[coord] = t_radiance * 1.0 / RAYS_PER_PIXEL;
                     break;
                 }
             case 0:
             default:{
-                    o_currentCascade_min[coord] = (PI * 4.0 / pow(2,(1 + g_cascadeId))) * t_radiance * 1.0 / RAYS_PER_PIXEL;
+                    o_currentCascade_min[coord] = t_radiance * 1.0 / RAYS_PER_PIXEL;
                     break;
                 }
         }
