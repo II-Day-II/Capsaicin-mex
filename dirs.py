@@ -491,7 +491,7 @@ def merge_targets(src_pos, probe_size, pip, d):
 
 
 def do_single_probe(cascade_idx):
-    probe_size = 1 << (cascade_idx + 1)
+    probe_size = 2#1 << (cascade_idx + 1)
     upper_probe_size = probe_size * 2
     probe = [] # [[(t, [m;4]);4];ps*ps]
     for x in range(probe_size):
@@ -560,7 +560,7 @@ def show_uvs():
     plt.show()
 
 #show_uvs()
-#do_single_probe(0)
+do_single_probe(0)
 
 def leak_dirs(ups, pip):
     offsets = [vec2(0,0),vec2(1,0),vec2(0,1),vec2(1,1)]
@@ -615,5 +615,5 @@ def find_out():
     
     plt.show()
 
-find_out()
+# find_out()
 

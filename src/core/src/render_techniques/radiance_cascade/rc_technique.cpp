@@ -80,12 +80,12 @@ void RCTechnique::render([[maybe_unused]] CapsaicinInternal &capsaicin) noexcept
         initKernel(capsaicin);
     }
 
+    int      rf       = newOptions.rc_resolution_factor;
     // resize probe textures if requested
     if (options.rc_resolution_factor != newOptions.rc_resolution_factor)
     {
-        int      rf       = newOptions.rc_resolution_factor;
-        constexpr uint const w         = nearest_pow_2(1920);
-        constexpr uint const h         = nearest_pow_2(1080);
+        uint const w         = nearest_pow_2(capsaicin.getWidth());
+        uint const h         = nearest_pow_2(capsaicin.getHeight());
         uint32_t newWidth = rf < 0 ? w >> -rf : w << rf;
         uint32_t newHeight = rf < 0 ? h >> -rf : h << rf;
         for (uint32_t i = 0; i < 2; i++)
@@ -98,18 +98,19 @@ void RCTechnique::render([[maybe_unused]] CapsaicinInternal &capsaicin) noexcept
         }
     }
 
+    gfxProgramSetParameter(gfx_, rc_program, "resolution_factor", rf);
 
     // resize minmax depth if necessary
-    //if (minmax_depth.getWidth() != nearest_pow_2(capsaicin.getWidth()) || minmax_depth.getHeight() != nearest_pow_2(capsaicin.getHeight()))
-    if (minmax_depth.getWidth() != rc_probes[0].min.getWidth() || minmax_depth.getHeight() != rc_probes[0].min.getHeight() || options.rc_cascade_count != newOptions.rc_cascade_count)
+    if (minmax_depth.getWidth() != nearest_pow_2(capsaicin.getWidth()) || minmax_depth.getHeight() != nearest_pow_2(capsaicin.getHeight()) || options.rc_cascade_count != newOptions.rc_cascade_count)
+    //if (minmax_depth.getWidth() != rc_probes[0].min.getWidth() || minmax_depth.getHeight() != rc_probes[0].min.getHeight() || options.rc_cascade_count != newOptions.rc_cascade_count)
     {
         gfxDestroyTexture(gfx_, minmax_depth);
         [[maybe_unused]]uint32_t mmdepth_width = nearest_pow_2(capsaicin.getWidth());
         [[maybe_unused]]uint32_t mmdepth_height = nearest_pow_2(capsaicin.getHeight());
         uint                      mip_count      = newOptions.rc_cascade_count + 3;
             //(uint)glm::floor(glm::log2(glm::max((float)rc_probes[0].min.getWidth(), (float)rc_probes[0].min.getHeight()))); // fuck it we ball, always get max mips
-        minmax_depth = gfxCreateTexture2D(gfx_, rc_probes[0].min.getWidth(), rc_probes[0].min.getHeight(), DXGI_FORMAT_R32G32_FLOAT, mip_count);
-        //minmax_depth = gfxCreateTexture2D(gfx_, mmdepth_width, mmdepth_height, DXGI_FORMAT_R32G32_FLOAT, newOptions.rc_cascade_count + 2);
+        //minmax_depth = gfxCreateTexture2D(gfx_, rc_probes[0].min.getWidth(), rc_probes[0].min.getHeight(), DXGI_FORMAT_R32G32_FLOAT, mip_count);
+        minmax_depth = gfxCreateTexture2D(gfx_, mmdepth_width, mmdepth_height, DXGI_FORMAT_R32G32_FLOAT, mip_count);
 
         minmax_depth.setName(texNames[2]);
     }
@@ -203,13 +204,24 @@ void RCTechnique::render([[maybe_unused]] CapsaicinInternal &capsaicin) noexcept
     // the min_max depth buffer
     gfxProgramSetParameter(gfx_, rc_program, "g_MinMaxDepth", minmax_depth);
 
+    GfxKernel boundKernel;
     switch (options.rc_preaveraging)
     {
-        case PreAverage4: gfxCommandBindKernel(gfx_, rc_kernel_preavg4); break;
-        case PreAverage0:
-        default: gfxCommandBindKernel(gfx_, rc_kernel); break;
+    case PreAverage4:
+        {
+        boundKernel = rc_kernel_preavg4;
+        }
+        break;
+    case PreAverage0:
+    default: 
+        {
+        boundKernel = rc_kernel;
+        }
+        break;
     }
 
+    gfxCommandBindKernel(gfx_, boundKernel);
+    
     int last_output_texture = 0;
     {
         TimedSection rc_probes_timer(*this, "render_cascades");
@@ -219,7 +231,7 @@ void RCTechnique::render([[maybe_unused]] CapsaicinInternal &capsaicin) noexcept
         gfxProgramSetParameter(gfx_, rc_program, "g_near", near_z);
         gfxProgramSetParameter(gfx_, rc_program, "g_far", far_z);
         
-        uint32_t const *thread_nums = gfxKernelGetNumThreads(gfx_, rc_kernel); // TODO: use the actually bound kernel instead of assuming they all have the same group sizes
+        uint32_t const *thread_nums = gfxKernelGetNumThreads(gfx_, boundKernel); // TODO: use the actually bound kernel instead of assuming they all have the same group sizes
         uint32_t        x = thread_nums[0], y = thread_nums[1];
         uint32_t        thread_size_x = uint32_t(glm::ceil(cascade_dimensions.x / float(x)));
         uint32_t        thread_size_y = uint32_t(glm::ceil(cascade_dimensions.y / float(y)));
@@ -227,8 +239,7 @@ void RCTechnique::render([[maybe_unused]] CapsaicinInternal &capsaicin) noexcept
         for (int cascade_level = cascade_count; cascade_level >= cascade_rendering_stop; cascade_level -= 1)
         {
             gfxProgramSetParameter(gfx_, rc_program, "g_cascadeId", cascade_level);
-            bool  ping_pong   = cascade_level % 2 == 0;
-            last_output_texture = ping_pong ? 0 : 1;
+            last_output_texture = cascade_level % 2;
 
             gfxProgramSetParameter(gfx_, rc_program, "g_lastCascade_min", rc_probes[last_output_texture].min);
             gfxProgramSetParameter(gfx_, rc_program, "o_currentCascade_min", rc_probes[1 - last_output_texture].min);
@@ -237,7 +248,7 @@ void RCTechnique::render([[maybe_unused]] CapsaicinInternal &capsaicin) noexcept
             gfxProgramSetParameter(
                 gfx_, rc_program, "o_currentCascade_max", rc_probes[1 - last_output_texture].max);
             
-            gfxCommandDispatch(gfx_, thread_size_x, thread_size_y, 1);  // TODO: BUG: c5 and c6 - probes at uv.y ~> 0.62 <~ are showing being placed on opposite side of floor with DA placement strategy (seems resolution dependent)...
+            gfxCommandDispatch(gfx_, thread_size_x, thread_size_y, 1); 
             last_output_texture = 1 - last_output_texture;
         }
     }

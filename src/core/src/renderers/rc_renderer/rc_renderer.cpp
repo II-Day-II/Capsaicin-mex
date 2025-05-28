@@ -41,7 +41,7 @@ public:
 	{
 		std::vector<std::unique_ptr<RenderTechnique>> render_techniques;
 		render_techniques.emplace_back(std::make_unique<VisibilityBuffer>());
-        render_techniques.emplace_back(std::make_unique<DAUTechnique>());
+        //render_techniques.emplace_back(std::make_unique<DAUTechnique>());
         //render_techniques.emplace_back(std::make_unique<SSGI>());
         //render_techniques.emplace_back(std::make_unique<GI10>());
         render_techniques.emplace_back(std::make_unique<RCTechnique>());

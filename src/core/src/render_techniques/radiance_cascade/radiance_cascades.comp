@@ -53,6 +53,9 @@ float g_far;
 // camera position in world space
 float3 g_Eye;
 
+// resolution scale factor: -1 for half, 1 for double
+int resolution_factor;
+
 float LinearizeDepth(float depth)
 {
     const float near = g_near; 
@@ -260,7 +263,9 @@ inline float3 oct_decode(const float2 e)
 #define SPHERE_MAP_MODE 2 // 0 -> costheta, 1 -> octahedral, 2 -> octahedral (equal area)
 #define PROBE_PLACEMENT 0 // 0 -> depth aware, 1 -> probe center // depth aware has issues with depth sensitive leakage
 
-#define MINMAX_MERGE 1 // 0 -> depth aware or probe center 1 -> min+max probes
+#define MINMAX_MERGE 0 // 0 -> depth aware or probe center 1 -> min+max probes
+#define MINMAX_LOOP 0 // 0 -> use 2x the compute threads to avoid a loop (this is a speedup!)
+
 #define REVERSE_LEAKING_FIX 0
 #define LEAKING_FIX 0 // highly incompatible with minmax, breaks depth aware filter
 #define DUMB_LEAKING_FIX 0 // probably the best leaking fix so far... still incompatible with minmax
@@ -375,7 +380,7 @@ void LeakingFix(inout float4 curr_radiance, float3 trace_end, uint2 nearest_uppe
     
     float2 upper_probe_center_uv = ((nearest_upper_probe_id + 0.5) * upper_probe_size) / g_CascadeTexDimensions;
     float3 upper_probe_normal = normalize(2.0 * g_GeometryNormalBuffer.SampleLevel(g_NearestSampler, upper_probe_center_uv, 0).xyz - 1.0);
-    float2 upper_probe_depths = g_MinMaxDepth.Load(int3(nearest_upper_probe_id, g_cascadeId + 2)).rg;
+    float2 upper_probe_depths = g_MinMaxDepth.Load(int3(nearest_upper_probe_id, g_cascadeId + 2 - resolution_factor)).rg;
     TwoPos upper_probe_origin = GetRayOriginDepthAware(upper_probe_center_uv, upper_probe_normal, upper_probe_depths);
     float3 origins[2] = { upper_probe_origin.near, upper_probe_origin.far };
     
@@ -491,7 +496,7 @@ float4 MergeUpperRadiance(float4 traced_radiance, uint2 target_probe_pos, uint2 
         uint2 upper_probe_id = upper_probe_tl + offset;
         
         #if PROBE_PLACEMENT == 0
-        float upper_depth = LinearizeDepth(g_MinMaxDepth.Load(int3(upper_probe_id, g_cascadeId + 2)).r); // TODO: Does this *need* to be linearized?? Check other places as well
+        float upper_depth = LinearizeDepth(g_MinMaxDepth.Load(int3(upper_probe_id, g_cascadeId + 2 - resolution_factor)).r); // TODO: Does this *need* to be linearized?? Check other places as well
         #elif PROBE_PLACEMENT == 1
         float upper_depth = LinearizeDepth(g_MinMaxDepth.Load(int3(upper_probe_id, 0)).r);
         #endif
@@ -553,8 +558,8 @@ float4 MinMaxMergeUpper(uint layer, float4 traced_radiance, uint2 target_probe_p
     {
         uint2 upper_probe_id = upper_probe_tl + BilinearOffset(i);
         float2 upper_probe_center_uv = (upper_probe_id + 0.5) * upper_probe_size * one_over_res; 
-        float2 upper_depths = LinearizeDepth(g_MinMaxDepth.SampleLevel(g_NearestSampler, upper_probe_center_uv, g_cascadeId+2).rg); 
-        //float2 upper_depths = /*LinearizeDepth*/(g_MinMaxDepth.Load(int3(upper_probe_id, g_cascadeId + 2)).rg); // BUG: using Load here misses bottom and right edges
+        float2 upper_depths = LinearizeDepth(g_MinMaxDepth.SampleLevel(g_NearestSampler, upper_probe_center_uv, g_cascadeId+2-resolution_factor).rg); 
+        //float2 upper_depths = /*LinearizeDepth*/(g_MinMaxDepth.Load(int3(upper_probe_id, g_cascadeId + 2 - resolution_factor)).rg); // BUG: using Load here misses bottom and right edges
         upper_probe_depths[0][i] = upper_depths.r;
         upper_probe_depths[1][i] = upper_depths.g;
     }
@@ -599,7 +604,7 @@ float4 MinMaxMergeUpper(uint layer, float4 traced_radiance, uint2 target_probe_p
 
 
 // The primary kernel for the whole algorithm. Make other options behave like this too please
-[numthreads(8,8,1)]
+[numthreads(8, 8, 1 + (1 - MINMAX_LOOP))]
 void TraceCascadesPreAvg4(uint3 did : SV_DispatchThreadID)
 {
     // constants for this cascade
@@ -646,7 +651,7 @@ void TraceCascadesPreAvg4(uint3 did : SV_DispatchThreadID)
     // get ray origin for this probe 
     #if !MINMAX_MERGE
     #if PROBE_PLACEMENT == 0
-    const float2 probe_depths = g_MinMaxDepth.SampleLevel(g_NearestSampler, probe_center_uv, cascade_index + 1).rg;
+    const float2 probe_depths = g_MinMaxDepth.SampleLevel(g_NearestSampler, probe_center_uv, cascade_index + 1 - resolution_factor).rg;
     const TwoPos origins = GetRayOriginDepthAware(probe_center_uv, probe_normal, probe_depths);
     const float3 origin = origins.near; // TODO: BUG: this gets us a bunch of stripes...? some resolution dependency with depth and probe textures, and weird self intersections. Depends on ray length??
     #elif PROBE_PLACEMENT == 1
@@ -718,11 +723,15 @@ void TraceCascadesPreAvg4(uint3 did : SV_DispatchThreadID)
     }
     o_currentCascade_min[coord] = t_radiance * 1.0 / RAYS_PER_PIXEL;
     #else
-    const float2 probe_depths = g_MinMaxDepth.SampleLevel(g_NearestSampler, probe_center_uv, cascade_index + 1).rg;
+    const float2 probe_depths = g_MinMaxDepth.SampleLevel(g_NearestSampler, probe_center_uv, cascade_index + 1 - resolution_factor).rg;
     const TwoPos origins = GetRayOriginDepthAware(probe_center_uv, probe_normal, probe_depths);
     const float3 probe_origins[2] = { origins.near, origins.far };
+    #if MINMAX_LOOP
     [unroll]
     for (uint layer = 0; layer < 2; layer++)
+    #else
+    uint layer = did.z;
+    #endif
     {
         float4 t_radiance = 0;
         [unroll]
@@ -830,13 +839,18 @@ void DebugInfo(uint3 did)
     }
     // get ray origin for this probe 
     probe_normal = normalize(2.0 * probe_normal - 1.0); // using this to offset the position, still getting self intersections...?
-    const float2 probe_depths = g_MinMaxDepth.SampleLevel(g_NearestSampler, probe_center_uv, g_cascadeId + 1).rg;
-    float3 origin = GetRayOriginDepthAware(probe_center_uv, probe_normal, probe_depths).near; // TODO: BUG: this gets us a bunch of stripes...? some resolution dependency with depth and probe textures, and weird self intersections. Depends on ray length??
-
-    const float3 origin2 = GetRayOrigin(probe_center_uv, probe_normal);
+    const float2 probe_depths = g_MinMaxDepth.SampleLevel(g_NearestSampler, probe_center_uv, cascade_index + 1 - resolution_factor).rg;
+    const TwoPos origins = GetRayOriginDepthAware(probe_center_uv, probe_normal, probe_depths);
+    const float3 probe_origins[2] = { origins.near, origins.far };
+    
+    float3 origin = origins.near;
+    
+    uint d = 0;
+    float3 direction = index_to_direction(d, uint2(2, 2), pos_in_probe, probe_size);
+    
+    TraceResult trace = TraceInterval(interval, origin, direction, is_max_cascade);
     
     //float4 t_radiance = 0;
-    //uint d = 0;
     //float3 direction = normalize(float3(0, 0, 1)); //index_to_direction(d, uint2(2, 2), pos_in_probe, probe_size);
     ////direction = normalize(origin - g_Eye);
     
@@ -855,7 +869,8 @@ void DebugInfo(uint3 did)
     //{
     //    f = origin;
     //}
-    o_currentCascade_min[coord] = float4(frac(origin).xxx, 1);
+    //o_currentCascade_min[coord] = float4(frac(trace.hit_point.xyz), 1);
+    o_currentCascade_min[coord] = float4(frac(origin), 1);
 }
 
 [numthreads(8,8,1)]
