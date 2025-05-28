@@ -260,10 +260,19 @@ inline float3 oct_decode(const float2 e)
 
 #define BILATERAL_UPSAMPLING 1
 #define MERGE_DIR_FIRST 0 // doesn't matter for bilinear, but bilateral has an effect here (no effect when preaveraging)
-#define SPHERE_MAP_MODE 2 // 0 -> costheta, 1 -> octahedral, 2 -> octahedral (equal area)
-#define PROBE_PLACEMENT 0 // 0 -> depth aware, 1 -> probe center // depth aware has issues with depth sensitive leakage
 
+#ifndef SPHERE_MAP_MODE
+#define SPHERE_MAP_MODE 2 // 0 -> costheta, 1 -> octahedral, 2 -> octahedral (equal area)
+#endif
+
+#ifndef PROBE_PLACEMENT
+#define PROBE_PLACEMENT 0 // 0 -> depth aware, 1 -> probe center // depth aware has issues with depth sensitive leakage
+#endif
+
+#ifndef MINMAX_MERGE
 #define MINMAX_MERGE 0 // 0 -> depth aware or probe center 1 -> min+max probes
+#endif
+
 #define MINMAX_LOOP 0 // 0 -> use 2x the compute threads to avoid a loop (this is a speedup!)
 
 #define REVERSE_LEAKING_FIX 0

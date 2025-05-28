@@ -20,6 +20,14 @@ public:
         PreAverage4 = 1,
         PreAverageSetupCount = 2,
     };
+
+    enum SphereMapOption
+    {
+        SphereMapOptionCosTheta = 0,
+        SphereMapOptionOctahedral = 1,
+        SphereMapOptionOctahedralEqArea = 2,
+        SphereMapOptionCount
+    };
     struct RenderOptions
     {
         // TODO: put parameters here, e.g. min/max bounds
@@ -30,6 +38,9 @@ public:
         int   rc_resolution_factor       = 0;
         bool  rc_cascade_range_only = false;
         bool  rc_skip_final_average      = false;
+        bool  rc_minmax_probes           = true;
+        int   rc_sphere_mapping          = SphereMapOption::SphereMapOptionOctahedralEqArea;
+        int   rc_probe_placement         = 0;
     };
 
     /**

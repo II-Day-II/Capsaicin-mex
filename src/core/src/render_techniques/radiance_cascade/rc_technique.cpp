@@ -5,6 +5,7 @@
 #include "capsaicin_internal.h"
 
 #include <bit> // For std::countl_zero
+#include <format> // for string formatting in a reasonable manner
 
 namespace Capsaicin
 {
@@ -71,13 +72,13 @@ void RCTechnique::render([[maybe_unused]] CapsaicinInternal &capsaicin) noexcept
 {
     // check for options change
     RenderOptions newOptions = convertOptions(capsaicin.getOptions());
-    bool          recompile  = false;
+    bool          recompile  = newOptions.rc_sphere_mapping != options.rc_sphere_mapping || newOptions.rc_minmax_probes != options.rc_minmax_probes || newOptions.rc_probe_placement != options.rc_probe_placement;
     
     if (recompile)
     {
         terminate();
 
-        initKernel(capsaicin);
+        init(capsaicin);
     }
 
     int      rf       = newOptions.rc_resolution_factor;
@@ -304,6 +305,9 @@ RenderOptionList RCTechnique::getRenderOptions() noexcept
     newOptions.emplace(RENDER_OPTION_MAKE(rc_resolution_factor, options));
     newOptions.emplace(RENDER_OPTION_MAKE(rc_cascade_range_only, options));
     newOptions.emplace(RENDER_OPTION_MAKE(rc_skip_final_average, options));
+    newOptions.emplace(RENDER_OPTION_MAKE(rc_sphere_mapping, options));
+    newOptions.emplace(RENDER_OPTION_MAKE(rc_probe_placement, options));
+    newOptions.emplace(RENDER_OPTION_MAKE(rc_minmax_probes, options));
     return newOptions;
 }
 
@@ -318,6 +322,9 @@ RCTechnique::RenderOptions RCTechnique::convertOptions(
     RENDER_OPTION_GET(rc_resolution_factor, newOptions, options);
     RENDER_OPTION_GET(rc_cascade_range_only, newOptions, options);
     RENDER_OPTION_GET(rc_skip_final_average, newOptions, options);
+    RENDER_OPTION_GET(rc_sphere_mapping, newOptions, options);
+    RENDER_OPTION_GET(rc_probe_placement, newOptions, options);
+    RENDER_OPTION_GET(rc_minmax_probes, newOptions, options);
     return newOptions;
 }
 
@@ -370,12 +377,34 @@ void RCTechnique::renderGUI([[maybe_unused]] CapsaicinInternal &capsaicin) const
     ImGui::Combo("Use Preaveraging", &capsaicin.getOption<int>("rc_preaveraging"),
         preavg_labels, RCTechnique::PreAverageSetupCount);
     ImGui::SliderInt("Resolution factor", &capsaicin.getOption<int>("rc_resolution_factor"), -4, 1);
+    char const *spheremap_labels[] = {"Cos-Theta", "Octahedral", "Octahedral (Equal Area)"};
+    ImGui::Combo("Sphere Map", &capsaicin.getOption<int>("rc_sphere_mapping"), spheremap_labels, RCTechnique::SphereMapOptionCount);
+    char const *probe_placement_labels[] = { "Min/Max depth", "Tile center" };
+    ImGui::Checkbox("Min+Max probes", &capsaicin.getOption<bool>("rc_minmax_probes"));
+    if (!capsaicin.getOption<bool>("rc_minmax_probes"))
+    {
+        ImGui::Combo("Probe depth-placement", &capsaicin.getOption<int>("rc_probe_placement"), probe_placement_labels, 2);
+    }
 }
 
 bool RCTechnique::initKernel(CapsaicinInternal const& capsaicin) noexcept
 {
     rc_program = gfxCreateProgram(gfx_, "render_techniques/radiance_cascade/radiance_cascades", capsaicin.getShaderPath());
     std::vector<char const *> defines;
+    const int spheremap_mode = capsaicin.getOption<int>("rc_sphere_mapping");
+    auto define_smm     = std::format("SPHERE_MAP_MODE {}", spheremap_mode);
+    defines.push_back(define_smm.c_str()); // this feels like a potential footgun
+    const int probe_placement = capsaicin.getOption<int>("rc_probe_placement");
+    auto define_pp       = std::format("PROBE_PLACEMENT {}", probe_placement);
+    defines.push_back(define_pp.c_str()); // footgun?
+    if (capsaicin.getOption<bool>("rc_minmax_probes"))
+    {
+        defines.push_back("MINMAX_MERGE 1");
+    }
+    else
+    {
+        defines.push_back("MINMAX_MERGE 0");
+    }
 
     rc_kernel = gfxCreateComputeKernel(
         gfx_, rc_program, "TraceCascades", defines.data(), (uint32_t)defines.size()); 
