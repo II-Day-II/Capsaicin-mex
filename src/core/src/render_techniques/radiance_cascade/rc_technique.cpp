@@ -99,7 +99,8 @@ void RCTechnique::render([[maybe_unused]] CapsaicinInternal &capsaicin) noexcept
         }
     }
 
-    gfxProgramSetParameter(gfx_, rc_program, "resolution_factor", rf);
+    gfxProgramSetParameter(gfx_, rc_program, "g_resolution_factor", rf);
+    gfxProgramSetParameter(gfx_, rc_program, "g_depth_bias_scale", newOptions.rc_depth_bias_scale);
 
     // resize minmax depth if necessary
     if (minmax_depth.getWidth() != nearest_pow_2(capsaicin.getWidth()) || minmax_depth.getHeight() != nearest_pow_2(capsaicin.getHeight()) || options.rc_cascade_count != newOptions.rc_cascade_count)
@@ -308,6 +309,7 @@ RenderOptionList RCTechnique::getRenderOptions() noexcept
     newOptions.emplace(RENDER_OPTION_MAKE(rc_sphere_mapping, options));
     newOptions.emplace(RENDER_OPTION_MAKE(rc_probe_placement, options));
     newOptions.emplace(RENDER_OPTION_MAKE(rc_minmax_probes, options));
+    newOptions.emplace(RENDER_OPTION_MAKE(rc_depth_bias_scale, options));
     return newOptions;
 }
 
@@ -325,6 +327,7 @@ RCTechnique::RenderOptions RCTechnique::convertOptions(
     RENDER_OPTION_GET(rc_sphere_mapping, newOptions, options);
     RENDER_OPTION_GET(rc_probe_placement, newOptions, options);
     RENDER_OPTION_GET(rc_minmax_probes, newOptions, options);
+    RENDER_OPTION_GET(rc_depth_bias_scale, newOptions, options);
     return newOptions;
 }
 
@@ -385,6 +388,7 @@ void RCTechnique::renderGUI([[maybe_unused]] CapsaicinInternal &capsaicin) const
     {
         ImGui::Combo("Probe depth-placement", &capsaicin.getOption<int>("rc_probe_placement"), probe_placement_labels, 2);
     }
+    ImGui::SliderFloat("Depth Bias scale", &capsaicin.getOption<float>("rc_depth_bias_scale"), 1.0f, 10000.0f, "%.4f", ImGuiSliderFlags_Logarithmic);
 }
 
 bool RCTechnique::initKernel(CapsaicinInternal const& capsaicin) noexcept

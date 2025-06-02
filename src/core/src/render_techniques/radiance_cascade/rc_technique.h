@@ -41,6 +41,7 @@ public:
         bool  rc_minmax_probes           = true;
         int   rc_sphere_mapping          = SphereMapOption::SphereMapOptionOctahedralEqArea;
         int   rc_probe_placement         = 0;
+        float rc_depth_bias_scale = 1.0;
     };
 
     /**
