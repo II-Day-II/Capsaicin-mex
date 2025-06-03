@@ -39,11 +39,12 @@ float4x4 g_ViewProjection;
 
 Texture2D g_VisibilityDepth;
 Texture2D g_MinMaxDepth;
+Texture2D g_MinMaxProbeUVs;
 
 // rc uniforms
 uint g_numCascades;
 uint g_cascadeId;
-uint2 g_BufferDimensions;
+//uint2 g_BufferDimensions;
 float g_c0_length;
 
 // depth remapping
@@ -58,6 +59,46 @@ int g_resolution_factor;
 
 // extra depth bias may be needed...
 float g_depth_bias_scale;
+
+// rc textures
+Texture2D g_lastCascade_min;
+Texture2D g_lastCascade_max;
+RWTexture2D<float4> o_currentCascade_min;
+RWTexture2D<float4> o_currentCascade_max;
+uint2 g_CascadeTexDimensions;
+
+#define DEBUG_DIRECTIONS 0
+#define DEBUG_DISABLE_MERGING 0
+#define DEBUG_DISABLE_ENV_MAP 0
+
+#define BILATERAL_UPSAMPLING 1
+#define MERGE_DIR_FIRST 0 // doesn't matter for bilinear, but bilateral has an effect here (no effect when preaveraging)
+
+#ifndef SPHERE_MAP_MODE
+#define SPHERE_MAP_MODE 2 // 0 -> costheta, 1 -> octahedral, 2 -> octahedral (equal area)
+#endif
+
+#ifndef PROBE_PLACEMENT
+#define PROBE_PLACEMENT 0 // 0 -> depth aware, 1 -> probe center // depth aware has issues with depth sensitive leakage
+#endif
+
+#ifndef MINMAX_MERGE
+#define MINMAX_MERGE 0 // 0 -> depth aware or probe center 1 -> min+max probes
+#endif
+
+#define MINMAX_LOOP 0 // 0 -> use 2x the compute threads to avoid a loop (this is a speedup!), 1 -> do the loop, lose time
+#define MINMAX_OFFSET_PROBES 1 // 0 -> probes are always at tile centers. 1 -> probes are offset to the pixels that the min/max depth in that tile are from
+
+#define REVERSE_LEAKING_FIX 0
+#define LEAKING_FIX 0 // highly incompatible with minmax, breaks depth aware filter
+#define DUMB_LEAKING_FIX 0 // probably the best leaking fix so far... still incompatible with minmax
+
+
+#define RAYS_PER_PIXEL 4 // 1 doesn't merge right, 4 is regular preaveraging and actually works, 16 is wack, use another kernel (write your own, future me) for other options
+
+
+#define EPSILON 0.00001
+
 
 float LinearizeDepth(float depth)
 {
@@ -146,6 +187,17 @@ TwoPos GetRayOriginDepthAware(float2 probe_uv, float3 normal, float2 probe_depth
     
     float4x4 transform = g_ViewProjectionInverse;
     float3 scaled_normal = normal * g_depth_bias_scale;// 34.5; // wtf is this (avoid self intersections) (34.5 is minimum for sponza??)
+    
+    #if MINMAX_OFFSET_PROBES
+    float4 new_uvs = g_MinMaxProbeUVs.SampleLevel(g_NearestSampler, probe_uv, g_cascadeId + 1 - g_resolution_factor);
+    float3 world_min = transformPointProjection(float3(2.0f.xx * float2(new_uvs.x, 1.0f - new_uvs.y) - 1.0f.xx, depth), transform);
+    float3 origin_min = offsetPosition(world_min, scaled_normal);
+    depth = min_max_depth.g;
+    float3 world_max = transformPointProjection(float3(2.0f.xx * float2(new_uvs.z, 1.0f - new_uvs.w) - 1.0f.xx, depth), transform);
+    float3 origin_max = offsetPosition(world_max, scaled_normal);
+    TwoPos ret = { origin_min, origin_max };
+    return ret;
+    #else
     float3 world_min = transformPointProjection(float3(2.0f.xx * float2(probe_uv.x, 1.0f - probe_uv.y) - 1.0f.xx, depth), transform);
     float3 origin_min = offsetPosition(world_min, scaled_normal);
     depth = min_max_depth.g;
@@ -153,6 +205,7 @@ TwoPos GetRayOriginDepthAware(float2 probe_uv, float3 normal, float2 probe_depth
     float3 origin_max = offsetPosition(world_max, scaled_normal);
     TwoPos ret = {origin_min, origin_max};
     return ret;
+#endif
     //return transformPointProjection(float3(2.0f * float2(probe_uv.x, 1.0f - probe_uv.y) - 1.0f, depth), transform) + normal * 1.0/32.0; // this seems safer than the admittedly cool offsetPosition(), but it's way more noticeable.
     //return transformPointProjection(float3(2.0f * float2(probe_uv.x, 1.0f - probe_uv.y) - 1.0f, depth), transform);
 }
@@ -212,11 +265,11 @@ float4 GetRadiance(IntersectData idata, RayDesc ray)
 
 /*- direction mapping: 
  *  source <https://www.shadertoy.com/view/4cjczV> -*/
-#define MIRROR 0
+#define OCTAHERDAL_MIRROR 0
 
 float3 octahedral_unmap(float2 e)
 {
-#if MIRROR
+#if OCTAHEDRAL_MIRROR
     /* Source: <https://www.shadertoy.com/view/MdsfzN> */
     float2 m = abs(e - 0.5) + 0.5;
     float2 f = floor(m);
@@ -257,40 +310,6 @@ inline float3 oct_decode(const float2 e)
 }
 /*- end direction mapping -*/
 
-#define DEBUG_DIRECTIONS 0
-#define DEBUG_DISABLE_MERGING 0
-#define DEBUG_DISABLE_ENV_MAP 0
-
-#define BILATERAL_UPSAMPLING 1
-#define MERGE_DIR_FIRST 0 // doesn't matter for bilinear, but bilateral has an effect here (no effect when preaveraging)
-
-#ifndef SPHERE_MAP_MODE
-#define SPHERE_MAP_MODE 2 // 0 -> costheta, 1 -> octahedral, 2 -> octahedral (equal area)
-#endif
-
-#ifndef PROBE_PLACEMENT
-#define PROBE_PLACEMENT 0 // 0 -> depth aware, 1 -> probe center // depth aware has issues with depth sensitive leakage
-#endif
-
-#ifndef MINMAX_MERGE
-#define MINMAX_MERGE 0 // 0 -> depth aware or probe center 1 -> min+max probes
-#endif
-
-#define MINMAX_LOOP 0 // 0 -> use 2x the compute threads to avoid a loop (this is a speedup!)
-
-#define REVERSE_LEAKING_FIX 0
-#define LEAKING_FIX 0 // highly incompatible with minmax, breaks depth aware filter
-#define DUMB_LEAKING_FIX 0 // probably the best leaking fix so far... still incompatible with minmax
-
-#define RAYS_PER_PIXEL 4 // 1 doesn't merge right, 4 is regular preaveraging and actually works, 16 is wack, use another kernel (write your own, future me) for other options
-
-#define EPSILON 0.00001
-
-Texture2D g_lastCascade_min;
-Texture2D g_lastCascade_max;
-RWTexture2D<float4> o_currentCascade_min;
-RWTexture2D<float4> o_currentCascade_max;
-uint2 g_CascadeTexDimensions;
 
 // idx: [0, sample_counts.x*sample_counts.y]
 // sample_counts: sqrt(rays per pixel)

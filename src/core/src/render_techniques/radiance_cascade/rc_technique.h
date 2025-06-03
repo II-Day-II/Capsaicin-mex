@@ -128,8 +128,9 @@ protected:
     GfxProgram minmax_depth_program;
     GfxKernel  minmax_depth_kernel;
     GfxTexture minmax_depth;
+    GfxTexture minmax_probe_uvs;
     
-    char const * const texNames[3] = {"RC_Probes_0", "RC_Probes_1", "RC_MinMaxDepth"};
+    char const *const texNames[4] = {"RC_Probes_0", "RC_Probes_1", "RC_MinMaxDepth", "RC_MinMaxProbeUVs"};
     
 
     GfxKernel     debug_rc_kernel;

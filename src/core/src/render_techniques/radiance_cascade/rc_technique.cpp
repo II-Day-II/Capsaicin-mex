@@ -113,8 +113,10 @@ void RCTechnique::render([[maybe_unused]] CapsaicinInternal &capsaicin) noexcept
             //(uint)glm::floor(glm::log2(glm::max((float)rc_probes[0].min.getWidth(), (float)rc_probes[0].min.getHeight()))); // fuck it we ball, always get max mips
         //minmax_depth = gfxCreateTexture2D(gfx_, rc_probes[0].min.getWidth(), rc_probes[0].min.getHeight(), DXGI_FORMAT_R32G32_FLOAT, mip_count);
         minmax_depth = gfxCreateTexture2D(gfx_, mmdepth_width, mmdepth_height, DXGI_FORMAT_R32G32_FLOAT, mip_count);
-
         minmax_depth.setName(texNames[2]);
+
+        minmax_probe_uvs = gfxCreateTexture2D(gfx_, mmdepth_width, mmdepth_height, DXGI_FORMAT_R32G32B32A32_FLOAT, mip_count);
+        minmax_probe_uvs.setName(texNames[3]);
     }
     
     options                  = newOptions;
@@ -125,6 +127,7 @@ void RCTechnique::render([[maybe_unused]] CapsaicinInternal &capsaicin) noexcept
         gfxCommandClearTexture(gfx_, rc_probes[0].max);
         gfxCommandClearTexture(gfx_, rc_probes[1].max);
         gfxCommandClearTexture(gfx_, minmax_depth);
+        gfxCommandClearTexture(gfx_, minmax_probe_uvs);
     }
 
     auto brdf_lut = capsaicin.getComponent<BrdfLut>();
@@ -147,6 +150,7 @@ void RCTechnique::render([[maybe_unused]] CapsaicinInternal &capsaicin) noexcept
         for (uint i = 0; i < minmax_depth.getMipLevels(); i++)
         {
             gfxProgramSetParameter(gfx_, minmax_depth_program, "o_MinMaxDepth", minmax_depth, i);
+            gfxProgramSetParameter(gfx_, minmax_depth_program, "o_MinMaxProbeUVs", minmax_probe_uvs, i);
             gfxProgramSetParameter(gfx_, minmax_depth_program, "g_mip_level", i);
             uint2 dispatch_size = glm::ceil(
                 float2(
@@ -157,7 +161,9 @@ void RCTechnique::render([[maybe_unused]] CapsaicinInternal &capsaicin) noexcept
             gfxCommandDispatch(gfx_, dispatch_size.x, dispatch_size.y, 1);
         }
     }
-
+   /* const D3D12_RESOURCE_UAV_BARRIER uav_barrier_puvs = {.pResource = gfxTextureGetResource(gfx_, minmax_probe_uvs)};
+    const D3D12_RESOURCE_BARRIER barrier_puvs{.Type=D3D12_RESOURCE_BARRIER_TYPE_UAV, .Flags=D3D12_RESOURCE_BARRIER_FLAG_NONE, .UAV = uav_barrier_puvs};
+    gfxGetCommandList(gfx_)->ResourceBarrier(1, &barrier_puvs);*/
     gfxProgramSetParameter(gfx_, rc_program, "g_VisibilityDepth", capsaicin.getAOVBuffer("VisibilityDepth"));
 
     gfxProgramSetParameter(gfx_, rc_program, "g_BufferDimensions", buffer_dimensions);
@@ -205,6 +211,8 @@ void RCTechnique::render([[maybe_unused]] CapsaicinInternal &capsaicin) noexcept
 
     // the min_max depth buffer
     gfxProgramSetParameter(gfx_, rc_program, "g_MinMaxDepth", minmax_depth);
+    // and the pixels representing the min and max depths
+    gfxProgramSetParameter(gfx_, rc_program, "g_MinMaxProbeUVs", minmax_probe_uvs);
 
     GfxKernel boundKernel;
     switch (options.rc_preaveraging)
@@ -233,7 +241,7 @@ void RCTechnique::render([[maybe_unused]] CapsaicinInternal &capsaicin) noexcept
         gfxProgramSetParameter(gfx_, rc_program, "g_near", near_z);
         gfxProgramSetParameter(gfx_, rc_program, "g_far", far_z);
         
-        uint32_t const *thread_nums = gfxKernelGetNumThreads(gfx_, boundKernel); // TODO: use the actually bound kernel instead of assuming they all have the same group sizes
+        uint32_t const *thread_nums = gfxKernelGetNumThreads(gfx_, boundKernel); 
         uint32_t        x = thread_nums[0], y = thread_nums[1];
         uint32_t        thread_size_x = uint32_t(glm::ceil(cascade_dimensions.x / float(x)));
         uint32_t        thread_size_y = uint32_t(glm::ceil(cascade_dimensions.y / float(y)));
@@ -458,6 +466,9 @@ bool RCTechnique::initTextures(CapsaicinInternal const& capsaicin) noexcept
     //minmax_depth = gfxCreateTexture2D(gfx_, capsaicin.getWidth(), capsaicin.getHeight(), DXGI_FORMAT_R32G32_FLOAT, mip_count);
     minmax_depth = gfxCreateTexture2D(gfx_, mmdepth_width, mmdepth_height, DXGI_FORMAT_R32G32_FLOAT, mip_count);
     minmax_depth.setName(texNames[2]);
+
+    minmax_probe_uvs = gfxCreateTexture2D(gfx_, mmdepth_width, mmdepth_height, DXGI_FORMAT_R32G32B32A32_FLOAT, mip_count);
+    minmax_probe_uvs.setName(texNames[3]);
 
     return !!minmax_depth && !!rc_probes[0].max;
 }

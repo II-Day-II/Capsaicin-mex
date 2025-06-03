@@ -1,7 +1,8 @@
 ﻿
 Texture2D g_Depth; // the full res depth texture
 uint g_mip_level;
-RWTexture2D<float2> o_MinMaxDepth; // the texture we're writing to
+RWTexture2D<float2> o_MinMaxDepth; // the texture we're writing min and max depths to
+RWTexture2D<float4> o_MinMaxProbeUVs; // we also write what pixel corresponds to the min/max depths
 
 uint2 g_dst_dimensions; // the dimensions of the target minmax depth texture's largest mip
 
@@ -24,6 +25,8 @@ void MinMaxDepth(uint3 did : SV_DispatchThreadID)
     float orig_depth = g_Depth.Load(int3(read_coord, 0)).r;
     float min_depth = orig_depth, max_depth = orig_depth;
     
+    float2 min_uvs = read_coord / src_dimensions.xy, max_uvs = read_coord / src_dimensions.xy;
+    
     for (uint y = 0; y < probe_size.y; y++)
     {
         for (uint x = 0; x < probe_size.x; x++)
@@ -34,10 +37,20 @@ void MinMaxDepth(uint3 did : SV_DispatchThreadID)
                 continue;
             }
             float d = g_Depth.Load(int3(pos, 0)).r;
-            min_depth = min(min_depth, d);
-            max_depth = max(max_depth, d);
+            if (d < min_depth)
+            {
+                min_depth = d;
+                min_uvs = pos / src_dimensions.xy;
+            }
+            else if (d > max_depth)
+            {
+                max_depth = d;
+                max_uvs = pos / src_dimensions.xy;
+            }
+            //min_depth = min(min_depth, d);
+            //max_depth = max(max_depth, d);
         }
     }
-    
+    o_MinMaxProbeUVs[coord] = float4(min_uvs, max_uvs);
     o_MinMaxDepth[coord] = float2(min_depth, max_depth);
 }
