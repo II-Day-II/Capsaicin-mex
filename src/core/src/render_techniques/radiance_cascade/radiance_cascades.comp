@@ -595,18 +595,18 @@ float4 MinMaxMergeUpper(uint layer, float4 traced_radiance, uint2 target_probe_p
         upper_probe_depths[1][i] = upper_depths.g;
     }
     
-    float maxd = dot(upper_probe_depths[1], 0.25.xxxx);
-    float mind = dot(upper_probe_depths[0], 0.25.xxxx);
-    float diffd = maxd - mind;
-    float avg = (maxd + mind) * 0.5;
+    //float maxd = dot(upper_probe_depths[1], 0.25.xxxx);
+    //float mind = dot(upper_probe_depths[0], 0.25.xxxx);
+    //float diffd = maxd - mind;
+    //float avg = (maxd + mind) * 0.5;
     //bool d_edge = (diffd / avg) > 0.02;
     
     
     
     float4 depth_diffs = abs(upper_probe_depths[1] - upper_probe_depths[0]);
-    float4 depth_weights = ((LinearizeDepth(target_probe_depth) - upper_probe_depths[0]) / depth_diffs); // fewer errors (in cornell) when not linearized (and skipping probes)
+    float4 depth_weights = ((LinearizeDepth(target_probe_depth) - upper_probe_depths[0]) / depth_diffs); 
     
-    bool4 skip_probes = or(depth_weights < -2.0 - FLT_EPSILON, depth_weights > 2.0 + FLT_EPSILON); // hack to avoid some of the haloing ( has side effects)
+    bool4 skip_probes = or(depth_weights < -1.0 - FLT_EPSILON, depth_weights > 2.0 + FLT_EPSILON); // hack to avoid some of the haloing ( has side effects)
     depth_weights = saturate(depth_weights);
         
     weights *= select(skip_probes, 0.0, 1.0); // does better with non-linear depths (and discarding everything < 0 or > 1
