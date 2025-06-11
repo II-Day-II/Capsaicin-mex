@@ -508,8 +508,8 @@ float4 MergeUpperRadiance(float4 traced_radiance, uint2 target_probe_pos, uint2 
     float2 ratio = frac(((target_probe_pos + 0.5) * target_probe_size) / float2(upper_probe_size) - 0.5); // Just assuming this is correct ¯\_(ツ)_/¯ its the same as BilinearSamples
     float4 weights = BilinearWeights(ratio);
     #else
-    uint2 upper_probe_tl;
-    float4 weights;
+    uint2 upper_probe_tl = 0;
+    float4 weights = 0;
     BilinearSamples(((target_probe_pos + 0.5) * target_probe_size), upper_probe_size, weights, upper_probe_tl);
     #endif
     
@@ -580,8 +580,8 @@ float4 MinMaxMergeUpper(uint layer, float4 traced_radiance, uint2 target_probe_p
 {
     const uint2 upper_probe_size = 2 * target_probe_size;
     const float2 one_over_res = 1.0 / float2(g_CascadeTexDimensions);
-    uint2 upper_probe_tl;
-    float4 weights;
+    uint2 upper_probe_tl = 0;
+    float4 weights = 0;
     BilinearSamples(((target_probe_pos + 0.5) * target_probe_size), upper_probe_size, weights, upper_probe_tl);
     
     float4 upper_probe_depths[2] = { 0.xxxx, 0.xxxx };
@@ -965,8 +965,8 @@ void TraceCascades(uint3 did : SV_DispatchThreadID)
     {
         // merge with upper cascade
         float2 upper_probe_size = probe_size * 2; //pow(2, cascade_index + 2);
-        float4 weights;
-        uint2 top_left_bilin_probe_coord;
+        float4 weights = 0;
+        uint2 top_left_bilin_probe_coord = 0;
         BilinearSamples(probe_center, upper_probe_size, weights, top_left_bilin_probe_coord);
         uint dir_index = pos_in_probe.x + probe_size.x * pos_in_probe.y;
         uint dir_count = probe_size.x * probe_size.y;
