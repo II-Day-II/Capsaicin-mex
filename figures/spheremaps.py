@@ -1,9 +1,27 @@
+import numpy as np
 import math
 import matplotlib.pyplot as plt
+
+def prep_ax(ax):
+    ax.grid(False)
+    ax.set_xticks([])
+    ax.set_yticks([])
+    ax.set_zticks([])
+    ax.axis('off')
+    ax.set_xlim(-1, 1)
+    ax.set_ylim(-1, 1)
+    ax.set_zlim(-1, 1)
+    ax.margins(0)
+    ax.set_aspect('equal')
+    # ax.use_sticky_edges = True
+    # ax.autoscale(enable=None, axis='both', tight=True)
 
 def normalize(v):
     l = math.sqrt(v[0]**2 + v[1]**2 + v[2]**2)
     return (v[0] / l, v[1] / l, v[2] / l)
+
+def distance(a, b):
+    return math.sqrt((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2 + (a[2] - b[2]) ** 2)
 
 def fibonacci_sphere(samples=1000):
 
@@ -88,40 +106,59 @@ def ea_octahedral(samples):
 
     return points
 
+def riesz_s_energy(points, s):
+    tot = 0
+    for i in range(len(points)):
+        for j in range(i+1, len(points)):
+            x = points[i]
+            y = points[j]
+            if s > 0:
+                tot += distance(x, y) ** -s 
+            elif s == 0:
+                tot += -math.log(distance(x, y))
+    return tot
 
-c0_points = 16 * 4
-c1_points = 4 * c0_points
-#c0 = fibonacci_sphere(c0_points)
-#c1 = fibonacci_sphere(c1_points)
-#c0 = costheta(c0_points)
-#c1 = costheta(c1_points)
-#c0 = octahedral(c0_points)
-#c1 = octahedral(c1_points)
-# c0 = ea_octahedral(c0_points)
-# c1 = ea_octahedral(c1_points)
-
-funcs = (fibonacci_sphere, costheta, octahedral, ea_octahedral)
-
-for sm in funcs:
-    c0 = sm(c0_points)
-    c1 = sm(c1_points)
-
-    fig = plt.figure()
-    ax = fig.add_subplot(111, projection='3d')
+def main():
+    c0_points = 16 
+    c1_points = 4 * c0_points
+    #c0 = fibonacci_sphere(c0_points)
+    #c1 = fibonacci_sphere(c1_points)
+    #c0 = costheta(c0_points)
+    #c1 = costheta(c1_points)
+    #c0 = octahedral(c0_points)
+    #c1 = octahedral(c1_points)
+    # c0 = ea_octahedral(c0_points)
+    # c1 = ea_octahedral(c1_points)
     
-    OFFSET = 0.000
+    funcs = (
+            fibonacci_sphere, 
+            costheta, 
+            octahedral, 
+            ea_octahedral)
     
-    ax.scatter([i[0] - (OFFSET if i[0] > 0 else -OFFSET) for i in c0], [i[1] - (OFFSET if i[1] > 0 else -OFFSET) for i in c0], [i[2] - (OFFSET if i[2] > 0 else -OFFSET) for i in c0], color='b')
-    ax.scatter([i[0] for i in c1], [i[1] for i in c1], [i[2] for i in c1], color='y')
+    for sm in funcs[:]:
+        c0 = sm(c0_points)
+        c1 = sm(c1_points)
     
-    def prep_ax(ax):
-        ax.set_aspect('equal')
-        ax.grid(False)
-        ax.set_xticks([])
-        ax.set_yticks([])
-        ax.set_zticks([])
-        ax.axis('off')
+        # print(riesz_s_energy(c0, 1) / len(c0))
+        # print(riesz_s_energy(c1, 1) / len(c1))
     
-    prep_ax(ax)
+        fig = plt.figure()
+        fig.set_layout_engine('tight')
+        ax = fig.add_subplot(111, projection='3d')
+        
+        OFFSET = 0.000
+        
+        ax.scatter([i[0] - (OFFSET if i[0] > 0 else -OFFSET) for i in c0], [i[1] - (OFFSET if i[1] > 0 else -OFFSET) for i in c0], [i[2] - (OFFSET if i[2] > 0 else -OFFSET) for i in c0], color='b')
+        ax.scatter([i[0] for i in c1], [i[1] for i in c1], [i[2] for i in c1], color='y')
+        
+        ax.plot([i[0] for i in c0][:], [i[1] for i in c0][:], np.array([i[2] for i in c0][:]), color='c', alpha=0.2)
+        ax.plot([i[0] for i in c1][:], [i[1] for i in c1][:], np.array([i[2] for i in c1][:]), color='y', alpha=0.2)
+    
+        
+        prep_ax(ax)
+    
+    plt.show()
 
-plt.show()
+if __name__ == "__main__":
+    main()
