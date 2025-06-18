@@ -1422,6 +1422,68 @@ bool CapsaicinMain::renderGUIDetails() noexcept
     return true;
 }
 
+void saveOtherFrameData(std::string frameFileName) noexcept 
+{
+    std::string csvfilePath = "./dump/captures.csv"s;
+    std::fstream csvfile;
+    csvfile.open(csvfilePath, std::fstream::app | std::fstream::out | std::fstream::in); // should create if not exists?
+
+    auto options = Capsaicin::GetOptions();
+    
+    bool empty = csvfile.peek() == std::fstream::traits_type::eof();
+
+    // need to seek after a peek to be able to write i guess
+    csvfile.seekp(0);
+    csvfile.seekg(0);
+    
+    if (empty) // write header if doesn't exist
+    {
+        // write header
+        csvfile << "image_name,"; // write image name 
+        for (auto& option : options) // write all the options
+        {
+            csvfile << option.first << ","sv;
+        }
+        // write frame time
+        csvfile << "frame_time,";
+        // write average frame time
+        csvfile << "avg_frame_time";
+        // end header line
+        csvfile << "\n";
+    }
+    // write image file name
+    csvfile << frameFileName << ","; 
+    for (auto& option : options) // write all the options
+    {
+        auto optionvalue = option.second;
+        if (std::holds_alternative<bool>(optionvalue))
+        {
+            csvfile << (std::get<bool>(optionvalue) ? "true"sv : "false"sv);
+        }
+        else if (std::holds_alternative<uint32_t>(optionvalue))
+        {
+            csvfile << std::get<uint32_t>(optionvalue);
+        }
+        else if (std::holds_alternative<int32_t>(optionvalue))
+        {
+            csvfile << std::get<int32_t>(optionvalue);
+        }
+        else if (std::holds_alternative<float>(optionvalue))
+        {
+            csvfile << std::get<float>(optionvalue);
+        }
+        csvfile << ","sv;
+    }
+    // write frame time
+    csvfile << Capsaicin::GetFrameTime() << ",";
+    // write avg frame time
+    csvfile << Capsaicin::GetAverageFrameTime();
+    // end line
+    csvfile << "\n";
+    csvfile.flush();
+    csvfile.close();
+}
+
 void CapsaicinMain::saveFrame() noexcept
 {
     // Ensure output directory exists
@@ -1455,6 +1517,9 @@ void CapsaicinMain::saveFrame() noexcept
     }
     // Save the current frame buffer to disk
     Capsaicin::DumpAOVBuffer(savePath.c_str(), "Color");
+    
+    // save other data in csv file
+    saveOtherFrameData(savePath);
 
     // Disable performing tone mapping as we output in HDR
     if (!saveAsJPEG && Capsaicin::hasOption<bool>("tonemap_enable"))
