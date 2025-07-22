@@ -4,3 +4,4 @@ imgui.ini
 .vscode
 .vs
 out
+figures/__pycache__/
