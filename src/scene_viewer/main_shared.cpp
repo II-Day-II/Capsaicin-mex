@@ -1424,12 +1424,155 @@ bool CapsaicinMain::renderGUIDetails() noexcept
 
 void saveOtherFrameData(std::string frameFileName) noexcept 
 {
+    using namespace std::string_literals;
+
+    std::string csvfilePath = "./dump/captures.csv";
+    auto        options     = Capsaicin::GetOptions();
+
+    // Step 1: Read existing CSV
+    std::ifstream                         infile(csvfilePath);
+    std::vector<std::string>              header;
+    std::vector<std::vector<std::string>> rows;
+
+    if (infile.good())
+    {
+        std::string line;
+        if (std::getline(infile, line))
+        {
+            std::stringstream ss(line);
+            std::string       col;
+            while (std::getline(ss, col, ','))
+            {
+                header.push_back(col);
+            }
+        }
+        while (std::getline(infile, line))
+        {
+            std::stringstream        ss(line);
+            std::string              cell;
+            std::vector<std::string> row;
+            while (std::getline(ss, cell, ','))
+            {
+                row.push_back(cell);
+            }
+            rows.push_back(row);
+        }
+    }
+    infile.close();
+
+    // Step 2: Ensure header contains required columns
+    if (header.empty())
+    {
+        header.push_back("image_name");
+        for (auto &opt : options)
+        {
+            header.push_back(std::string(opt.first)); // copy key from string_view
+        }
+        header.push_back("frame_time");
+        header.push_back("avg_frame_time");
+    }
+    else
+    {
+        // Find "frame_time" position (or add if missing)
+        auto        ftIt = std::find(header.begin(), header.end(), "frame_time");
+        std::size_t ftIndex;
+        if (ftIt == header.end())
+        {
+            header.push_back("frame_time");
+            header.push_back("avg_frame_time");
+            ftIndex = header.size() - 2;
+            for (auto &row : rows)
+            {
+                row.push_back("");
+                row.push_back("");
+            }
+        }
+        else
+        {
+            ftIndex = static_cast<std::size_t>(std::distance(header.begin(), ftIt));
+        }
+
+        // Add missing option keys before "frame_time"
+        for (auto &opt : options)
+        {
+            if (std::find(header.begin(), header.end(), opt.first) == header.end())
+            {
+                header.insert(header.begin() + ftIndex, std::string(opt.first)); // copy key
+                for (auto &row : rows)
+                {
+                    std::size_t insertPos = std::min(ftIndex, row.size());
+                    row.insert(row.begin() + insertPos, "");
+                }
+                ++ftIndex;
+            }
+        }
+    }
+
+    // Step 3: Build new row
+    std::vector<std::string> newRow(header.size(), "");
+    for (std::size_t i = 0; i < header.size(); ++i)
+    {
+        if (header[i] == "image_name")
+        {
+            newRow[i] = frameFileName;
+        }
+        else if (header[i] == "frame_time")
+        {
+            newRow[i] = std::to_string(Capsaicin::GetFrameTime());
+        }
+        else if (header[i] == "avg_frame_time")
+        {
+            newRow[i] = std::to_string(Capsaicin::GetAverageFrameTime());
+        }
+        else
+        {
+            auto it = options.find(header[i]); // works with std::string because map key is string_view
+            if (it != options.end())
+            {
+                auto &val = it->second;
+                if (std::holds_alternative<bool>(val))
+                    newRow[i] = std::get<bool>(val) ? "true" : "false";
+                else if (std::holds_alternative<uint32_t>(val))
+                    newRow[i] = std::to_string(std::get<uint32_t>(val));
+                else if (std::holds_alternative<int32_t>(val))
+                    newRow[i] = std::to_string(std::get<int32_t>(val));
+                else if (std::holds_alternative<float>(val))
+                    newRow[i] = std::to_string(std::get<float>(val));
+            }
+        }
+    }
+
+    // Step 4: Append and rewrite
+    rows.push_back(newRow);
+    std::ofstream outfile(csvfilePath, std::ofstream::trunc);
+
+    // Write header
+    for (std::size_t i = 0; i < header.size(); ++i)
+    {
+        outfile << header[i];
+        if (i + 1 < header.size()) outfile << ",";
+    }
+    outfile << "\n";
+
+    // Write rows
+    for (auto &row : rows)
+    {
+        for (std::size_t i = 0; i < row.size(); ++i)
+        {
+            outfile << row[i];
+            if (i + 1 < row.size()) outfile << ",";
+        }
+        outfile << "\n";
+    }
+    /*
     std::string csvfilePath = "./dump/captures.csv"s;
     std::fstream csvfile;
     csvfile.open(csvfilePath, std::fstream::app | std::fstream::out | std::fstream::in); // should create if not exists?
 
-    auto options = Capsaicin::GetOptions();
+    static auto options = Capsaicin::GetOptions();
     
+    bool newSettings = options != Capsaicin::GetOptions();
+
     bool empty = csvfile.peek() == std::fstream::traits_type::eof();
 
     // need to seek after a peek to be able to write i guess
@@ -1482,6 +1625,7 @@ void saveOtherFrameData(std::string frameFileName) noexcept
     csvfile << "\n";
     csvfile.flush();
     csvfile.close();
+    */
 }
 
 void CapsaicinMain::saveFrame() noexcept
