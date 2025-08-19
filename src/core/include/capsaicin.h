@@ -165,6 +165,24 @@ CAPSAICIN_EXPORT double GetFrameTime() noexcept;
  */
 CAPSAICIN_EXPORT double GetAverageFrameTime() noexcept;
 
+
+
+
+/**
+* Get the GPU timestamp time of the last frame
+* @return The elapsed frame time gathered from timestamp queries
+*/
+CAPSAICIN_EXPORT double GetFrameTimeGPU() noexcept;
+
+/**
+* Get the average GPU time of the last 256 frames
+* @return The elapsed frame time
+*/
+CAPSAICIN_EXPORT double GetAverageFrameTimeGPU() noexcept;
+
+
+
+
 /**
  * Check if the current scene has any usable animations.
  * @return True if animations are present, False otherwise.

@@ -11,6 +11,8 @@ FIELDS_OF_INTEREST = {
         "rc_resolution_factor": int,
         "frame_time"          : float,
         "avg_frame_time"      : float,
+        "frame_time_gpu"          : float,
+        "avg_frame_time_gpu"      : float,
        }
 
 def plots(data, title_suffix):
@@ -25,20 +27,32 @@ def plots(data, title_suffix):
     data.sort(key=lambda row: row["rc_resolution_factor"])
 
     frame_times_bilateral = []
+    avg_frame_times_bilateral = []
+    gpu_frame_times_bilateral = []
+    gpu_avg_frame_times_bilateral = []
     mean_errors_bilateral = []
     resolution_factors_bilateral = []
     frame_times_minmax = []
+    avg_frame_times_minmax = []
+    gpu_frame_times_minmax = []
+    gpu_avg_frame_times_minmax = []
     mean_errors_minmax = []
     resolution_factors_minmax = []
     for row in data:
         # -- minmax --
         if row["rc_minmax_probes"]:
             frame_times_minmax.append(round(row["frame_time"] * 1000,4))
+            avg_frame_times_minmax.append(round(row["avg_frame_time"] * 1000,4))
+            gpu_avg_frame_times_minmax.append(round(row["avg_frame_time_gpu"],4))
+            gpu_frame_times_minmax.append(round(row["frame_time_gpu"],4))
             mean_errors_minmax.append(round(row["mean_flip_error"],4))
             resolution_factors_minmax.append(row["rc_resolution_factor"])
         # -- bilateral --
         else:
             frame_times_bilateral.append(round(row["frame_time"] * 1000,4))
+            avg_frame_times_bilateral.append(round(row["avg_frame_time"] * 1000,4))
+            gpu_avg_frame_times_bilateral.append(round(row["avg_frame_time_gpu"],4))
+            gpu_frame_times_bilateral.append(round(row["frame_time_gpu"],4))
             mean_errors_bilateral.append(round(row["mean_flip_error"],4))
             resolution_factors_bilateral.append(row["rc_resolution_factor"])
     
@@ -54,16 +68,27 @@ def plots(data, title_suffix):
     width = 0.25
     x = np.arange(3)
 
-    for i, measurement in enumerate((frame_times_bilateral, frame_times_minmax)):
+    for i, measurement in enumerate((gpu_avg_frame_times_bilateral, gpu_avg_frame_times_minmax)):
         offset = i * width
         rects = ax1.bar(x + offset, measurement, width, label=label_suffixes[i])
         ax1.bar_label(rects, padding=2)
     # labels
-    ax1.set_ylabel("Average Frame Time (ms)")
-    ax1.set_title(f"Frame times by probe grid resolution ({title_suffix})")
+    ax1.set_ylabel("Average GPU Frame Time (ms)")
+    ax1.set_title(f"Average GPU Frame times by probe grid resolution ({title_suffix})")
     ax1.set_xticks(x + width * 0.5, resolution_factor_categories)
     ax1.legend()
     
+    fig, ax3 = plt.subplots(layout="constrained")
+    for i, measurement in enumerate((avg_frame_times_bilateral, avg_frame_times_minmax)):
+        offset = i * width
+        rects = ax3.bar(x + offset, measurement, width, label=label_suffixes[i])
+        ax3.bar_label(rects, padding=2)
+    # labels
+    ax3.set_ylabel("Average CPU Frame Time (ms)")
+    ax3.set_title(f"Average CPU frame times by probe grid resolution ({title_suffix})")
+    ax3.set_xticks(x + width * 0.5, resolution_factor_categories)
+    ax3.legend()
+
     # plot flip errors
     fig, ax2 = plt.subplots(layout="constrained")
 
@@ -119,7 +144,7 @@ def main():
 
         # fig, axs = plt.subplots()
         # axs.imshow(errormap)
-        # axs.set_label(row["image_name"])
+        # axs.set_title(row["image_name"])
     # print(" | ".join([f"{key}: {value}" for row in sponza_data for key, value in row.items() if key != "error_map"]))
     plots(sponza_data, "Sponza")
     plots(cornel_data, "Cornel Box")

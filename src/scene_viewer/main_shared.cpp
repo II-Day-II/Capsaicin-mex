@@ -1470,6 +1470,8 @@ void saveOtherFrameData(std::string frameFileName) noexcept
         }
         header.push_back("frame_time");
         header.push_back("avg_frame_time");
+        header.push_back("frame_time_gpu");
+        header.push_back("avg_frame_time_gpu");
     }
     else
     {
@@ -1480,6 +1482,8 @@ void saveOtherFrameData(std::string frameFileName) noexcept
         {
             header.push_back("frame_time");
             header.push_back("avg_frame_time");
+            header.push_back("frame_time_gpu");
+            header.push_back("avg_frame_time_gpu");
             ftIndex = header.size() - 2;
             for (auto &row : rows)
             {
@@ -1507,7 +1511,7 @@ void saveOtherFrameData(std::string frameFileName) noexcept
             }
         }
     }
-
+    
     // Step 3: Build new row
     std::vector<std::string> newRow(header.size(), "");
     for (std::size_t i = 0; i < header.size(); ++i)
@@ -1523,6 +1527,14 @@ void saveOtherFrameData(std::string frameFileName) noexcept
         else if (header[i] == "avg_frame_time")
         {
             newRow[i] = std::to_string(Capsaicin::GetAverageFrameTime());
+        }
+        else if (header[i] == "frame_time_gpu")
+        {
+            newRow[i] = std::to_string(Capsaicin::GetFrameTimeGPU());
+        }
+        else if (header[i] == "avg_frame_time_gpu")
+        {
+            newRow[i] = std::to_string(Capsaicin::GetAverageFrameTimeGPU());
         }
         else
         {
@@ -1564,68 +1576,7 @@ void saveOtherFrameData(std::string frameFileName) noexcept
         }
         outfile << "\n";
     }
-    /*
-    std::string csvfilePath = "./dump/captures.csv"s;
-    std::fstream csvfile;
-    csvfile.open(csvfilePath, std::fstream::app | std::fstream::out | std::fstream::in); // should create if not exists?
-
-    static auto options = Capsaicin::GetOptions();
     
-    bool newSettings = options != Capsaicin::GetOptions();
-
-    bool empty = csvfile.peek() == std::fstream::traits_type::eof();
-
-    // need to seek after a peek to be able to write i guess
-    csvfile.seekp(0);
-    csvfile.seekg(0);
-    
-    if (empty) // write header if doesn't exist
-    {
-        // write header
-        csvfile << "image_name,"; // write image name 
-        for (auto& option : options) // write all the options
-        {
-            csvfile << option.first << ","sv;
-        }
-        // write frame time
-        csvfile << "frame_time,";
-        // write average frame time
-        csvfile << "avg_frame_time";
-        // end header line
-        csvfile << "\n";
-    }
-    // write image file name
-    csvfile << frameFileName << ","; 
-    for (auto& option : options) // write all the options
-    {
-        auto optionvalue = option.second;
-        if (std::holds_alternative<bool>(optionvalue))
-        {
-            csvfile << (std::get<bool>(optionvalue) ? "true"sv : "false"sv);
-        }
-        else if (std::holds_alternative<uint32_t>(optionvalue))
-        {
-            csvfile << std::get<uint32_t>(optionvalue);
-        }
-        else if (std::holds_alternative<int32_t>(optionvalue))
-        {
-            csvfile << std::get<int32_t>(optionvalue);
-        }
-        else if (std::holds_alternative<float>(optionvalue))
-        {
-            csvfile << std::get<float>(optionvalue);
-        }
-        csvfile << ","sv;
-    }
-    // write frame time
-    csvfile << Capsaicin::GetFrameTime() << ",";
-    // write avg frame time
-    csvfile << Capsaicin::GetAverageFrameTime();
-    // end line
-    csvfile << "\n";
-    csvfile.flush();
-    csvfile.close();
-    */
 }
 
 void CapsaicinMain::saveFrame() noexcept

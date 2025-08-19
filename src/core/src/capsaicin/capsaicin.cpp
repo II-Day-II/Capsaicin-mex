@@ -157,6 +157,18 @@ double GetAverageFrameTime() noexcept
     return 0.0;
 }
 
+double GetFrameTimeGPU() noexcept
+{
+    if (g_renderer != nullptr) return g_renderer->getFrameTimeGPU();
+    return 0.0;
+}
+
+double GetAverageFrameTimeGPU() noexcept
+{
+    if (g_renderer != nullptr) return g_renderer->getAverageFrameTimeGPU();
+    return 0.0;
+}
+
 bool HasAnimation() noexcept
 {
     if (g_renderer != nullptr) return g_renderer->hasAnimation();

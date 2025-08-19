@@ -84,6 +84,16 @@ double CapsaicinInternal::getAverageFrameTime() const noexcept
     return frameGraph.getAverageValue();
 }
 
+double CapsaicinInternal::getFrameTimeGPU() const noexcept
+{
+    return frame_time_gpu;
+}
+
+double CapsaicinInternal::getAverageFrameTimeGPU() const noexcept
+{
+    return frameGraph_gpu.getAverageValue();
+}
+
 bool CapsaicinInternal::hasAnimation() const noexcept
 {
     return gfxSceneGetAnimationCount(scene_) > 0;
@@ -316,6 +326,7 @@ bool CapsaicinInternal::setRenderer(std::string_view const &name) noexcept
         renderer_name_ = "";
     }
     frameGraph.reset();
+    frameGraph_gpu.reset();
     setupRenderTechniques(name);
     return true;
 }
@@ -1064,6 +1075,7 @@ void CapsaicinInternal::render()
         transform_updated_ = false;
 
         frameGraph.addValue(static_cast<float>(frame_time_));
+        frameGraph_gpu.addValue(static_cast<float>(frame_time_gpu));
 
         constant_buffer_pool_cursor_ = 0;
         was_resized_ =
@@ -1807,7 +1819,7 @@ void CapsaicinInternal::renderGUI(bool readOnly)
         {
             ImGui::TreePop();
         }
-
+        frame_time_gpu = totalTimestampTime;
         ImGui::Separator();
 
         const std::string graphName = std::format("{:.2f}", frame_time_ * 1000.0) + " ms ("

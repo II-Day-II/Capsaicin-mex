@@ -605,6 +605,11 @@ public:
      */
     void dumpCamera(char const *file_path, bool jittered);
 
+
+
+    double getFrameTimeGPU() const noexcept;
+    double getAverageFrameTimeGPU() const noexcept;
+
 private:
     /**
      * Sets up the render techniques for the currently set renderer.
@@ -739,5 +744,9 @@ private:
     std::deque<std::tuple<GfxBuffer, uint32_t, uint32_t, std::string, uint32_t>> dump_in_flight_buffers_;
     GfxKernel                                                                    dump_copy_to_buffer_kernel_;
     GfxProgram                                                                   dump_copy_to_buffer_program_;
+
+
+    double frame_time_gpu;
+    Graph  frameGraph_gpu;
 };
 } // namespace Capsaicin
