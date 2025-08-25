@@ -32,7 +32,7 @@ def do_figure(bilateral_data, minmax_data, title, y_label, x_labels, categories)
     ax1.set_ylabel(y_label)
     ax1.set_title(title)
     ax1.set_xticks(x + width * 0.5, categories)
-    ax1.legend()
+    ax1.legend(loc="lower right")
     return [fig]
 
 def plots(data, title_suffix):
@@ -62,7 +62,7 @@ def plots(data, title_suffix):
             gpu_frame_times_minmax.append(round(row["frame_time_gpu"],4))
             mean_errors_minmax.append(round(row["mean_flip_error"],4))
             resolution_factors_minmax.append(row["rc_resolution_factor"])
-            ssim_minmax.append(row["ssim_error"])
+            ssim_minmax.append(round(row["ssim_error"],4))
         # -- bilateral --
         else:
             frame_times_bilateral.append(round(row["frame_time"] * 1000,4))
@@ -71,7 +71,7 @@ def plots(data, title_suffix):
             gpu_frame_times_bilateral.append(round(row["frame_time_gpu"],4))
             mean_errors_bilateral.append(round(row["mean_flip_error"],4))
             resolution_factors_bilateral.append(row["rc_resolution_factor"])
-            ssim_bilateral.append(row["ssim_error"])
+            ssim_bilateral.append(round(row["ssim_error"],4))
     
     assert (resolution_factors_minmax == resolution_factors_bilateral) # make sure they're properly sorted
 
@@ -165,7 +165,7 @@ def main():
             ref_path = sponza_ref_path
             sponza_data.append(row)
         else:
-            scene_str = "Cornel Box"
+            scene_str = "Cornell Box"
             ref = cornellref
             ref_path = cornel_ref_path
             cornel_data.append(row)
@@ -187,7 +187,7 @@ def main():
 
         fig, axs = plt.subplots(layout="constrained")
         axs.imshow(errormap)
-        res_str = lambda x: "quarter res" if x == -1 else "half res" if x == 0 else "full res"
+        res_str = lambda x: "half res" if x == -1 else "full res" if x == 0 else "double res"
         title = scene_str + "-" + ("Min+Max" if row["rc_minmax_probes"] else "Bilateral") + "-" + "(" + res_str(row["rc_resolution_factor"]) + ")"
         axs.set_title(title)
         axs.axis('off')
@@ -196,9 +196,9 @@ def main():
 
     # print(" | ".join([f"{key}: {value}" for row in sponza_data for key, value in row.items() if key != "error_map"]))
     figures += plots(sponza_data, "Sponza")
-    figures += plots(cornel_data, "Cornel Box")
+    figures += plots(cornel_data, "Cornell Box")
     for f in figures:
-        f.savefig(OUTPUT_DIR + f.get_axes()[0].get_title() + ".png", bbox_inches='tight')
+        f.savefig((OUTPUT_DIR + f.get_axes()[0].get_title()).replace(" ", "_") + ".png", bbox_inches='tight')
     # plt.show()
 
 if __name__ == "__main__":
