@@ -19,7 +19,7 @@ FIELDS_OF_INTEREST = {
         "avg_frame_time_gpu"      : float,
        }
 
-def do_figure(bilateral_data, minmax_data, title, y_label, x_labels, categories):
+def do_figure(bilateral_data, minmax_data, title, y_label, x_labels, categories, interval_max=None):
     fig, ax1 = plt.subplots(layout="constrained")
     width = 0.25
     x = np.arange(3)
@@ -28,6 +28,8 @@ def do_figure(bilateral_data, minmax_data, title, y_label, x_labels, categories)
         offset = i * width
         rects = ax1.bar(x + offset, measurement, width, label=x_labels[i])
         ax1.bar_label(rects, padding=2)
+    if interval_max is not None:
+        ax1.set_ylim([0, interval_max])
     # labels
     ax1.set_ylabel(y_label)
     ax1.set_title(title)
@@ -80,31 +82,34 @@ def plots(data, title_suffix):
     
     generated_figs = []
     # plot frame times
-    generated_figs += do_figure(
-            gpu_avg_frame_times_bilateral,
-            gpu_avg_frame_times_minmax,
-            f"Average GPU frame times by probe grid resolution ({title_suffix})",
-            "Average GPU frame time (ms)",
-            label_suffixes, 
-            resolution_factor_categories)
-
-    generated_figs += do_figure(
-            avg_frame_times_bilateral,
-            avg_frame_times_minmax,
-            f"Average CPU frame times by probe grid resolution ({title_suffix})",
-            "Average CPU frame time (ms)",
-            label_suffixes,
-            resolution_factor_categories)
-    
-    # plot flip errors
-    f = chr(0xa7fb)
-    generated_figs += do_figure(
-            mean_errors_bilateral, 
-            mean_errors_minmax,
-            f"Mean {f}LIP error by probe grid resolution ({title_suffix})",
-            f"Mean {f}LIP Error",
-            label_suffixes,
-            resolution_factor_categories)
+    # generated_figs += do_figure(
+    #         gpu_avg_frame_times_bilateral,
+    #         gpu_avg_frame_times_minmax,
+    #         f"Average GPU frame times by probe grid resolution ({title_suffix})",
+    #         "Average GPU frame time (ms)",
+    #         label_suffixes, 
+    #         resolution_factor_categories,
+    #         interval_max=170)
+    #
+    # generated_figs += do_figure(
+    #         avg_frame_times_bilateral,
+    #         avg_frame_times_minmax,
+    #         f"Average CPU frame times by probe grid resolution ({title_suffix})",
+    #         "Average CPU frame time (ms)",
+    #         label_suffixes,
+    #         resolution_factor_categories,
+    #         interval_max=170)
+    #
+    # # plot flip errors
+    # f = chr(0xa7fb)
+    # generated_figs += do_figure(
+    #         mean_errors_bilateral, 
+    #         mean_errors_minmax,
+    #         f"Mean {f}LIP error by probe grid resolution ({title_suffix})",
+    #         f"Mean {f}LIP Error",
+    #         label_suffixes,
+    #         resolution_factor_categories,
+    #         interval_max=0.75)
 
     # plot ssim
     generated_figs += do_figure(
@@ -113,7 +118,8 @@ def plots(data, title_suffix):
             f"Image similarity by probe grid resolution ({title_suffix})",
             "Image similarity (SSIM)",
             label_suffixes,
-            resolution_factor_categories)
+            resolution_factor_categories,
+            interval_max=0.125)
     return generated_figs
     
 ssims = 0
@@ -185,21 +191,21 @@ def main():
 
         # print(" | ".join([f"{key}: {value}" for key, value in outdicts[i].items() if key != "error_map"]))
 
-        fig, axs = plt.subplots(layout="constrained")
-        axs.imshow(errormap)
-        res_str = lambda x: "half res" if x == -1 else "full res" if x == 0 else "double res"
-        title = scene_str + "-" + ("Min+Max" if row["rc_minmax_probes"] else "Bilateral") + "-" + "(" + res_str(row["rc_resolution_factor"]) + ")"
-        axs.set_title(title)
-        axs.axis('off')
-
-        figures.append(fig)
+        # fig, axs = plt.subplots(layout="constrained")
+        # axs.imshow(errormap)
+        # res_str = lambda x: "half res" if x == -1 else "full res" if x == 0 else "double res"
+        # title = scene_str + "-" + ("Min+Max" if row["rc_minmax_probes"] else "Bilateral") + "-" + "(" + res_str(row["rc_resolution_factor"]) + ")"
+        # axs.set_title(title)
+        # axs.axis('off')
+        #
+        # figures.append(fig)
 
     # print(" | ".join([f"{key}: {value}" for row in sponza_data for key, value in row.items() if key != "error_map"]))
     figures += plots(sponza_data, "Sponza")
     figures += plots(cornel_data, "Cornell Box")
-    for f in figures:
-        f.savefig((OUTPUT_DIR + f.get_axes()[0].get_title()).replace(" ", "_") + ".png", bbox_inches='tight')
-    # plt.show()
+    # for f in figures:
+    #     f.savefig((OUTPUT_DIR + f.get_axes()[0].get_title()).replace(" ", "_") + ".png", bbox_inches='tight')
+    plt.show()
 
 if __name__ == "__main__":
     main()

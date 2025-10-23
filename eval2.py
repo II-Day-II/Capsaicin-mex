@@ -41,14 +41,16 @@ def plots(data, title):
             f"Mean {f}LIP error by probe grid resolution ({title}) - TONEMAPPED",
             f"Mean {f}LIP Error",
             label_suffixes,
-            resolution_factor_categories)
+            resolution_factor_categories,
+            interval_max=0.6)
     generated_figs += evaluate.do_figure(
             ssim_bilateral,
             ssim_minmax,
             f"Image similarity by probe grid resolution ({title}) - TONEMAPPED",
             "Image similarity (SSIM)",
             label_suffixes,
-            resolution_factor_categories)
+            resolution_factor_categories,
+            interval_max=1)
     return generated_figs
 
 def run_ssim(ref, test):
@@ -130,9 +132,9 @@ def main():
     # print(" | ".join([f"{key}: {value}" for row in sponza_data for key, value in row.items() if key != "error_map"]))
     figures += plots(sponza_data, "Sponza")
     figures += plots(cornel_data, "Cornell Box")
-    for f in figures:
-        f.savefig((evaluate.OUTPUT_DIR + f.get_axes()[0].get_title()).replace(" ", "_") + ".png", bbox_inches='tight')
-    # plt.show()
+    # for f in figures:
+    #     f.savefig((evaluate.OUTPUT_DIR + f.get_axes()[0].get_title()).replace(" ", "_") + ".png", bbox_inches='tight')
+    plt.show()
 
 
 if __name__ == "__main__":
